@@ -1,0 +1,14 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+*.env
+.env.*
+!deploy/.env.example
+runtime.env
+bin/
+
