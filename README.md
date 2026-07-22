@@ -6,3 +6,11 @@ Part of Equipment + Technologist (draft-only) epic. See `masterdoc/docs/superpow
 ./gradlew test
 ./gradlew run
 ```
+
+## Deploy (VPS)
+
+```bash
+cd deploy && docker compose up -d --build --wait
+```
+
+Default port via `PORT` (see `Application.kt`). Gateway reaches the service at `http://host.docker.internal:<port>`.
