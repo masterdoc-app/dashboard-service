@@ -22,7 +22,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun createUpdateConfirm() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")
@@ -51,7 +51,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun emptyItemsRejected() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")
@@ -63,7 +63,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun intervalEveryLessThanOneRejected() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")
@@ -77,7 +77,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun listFiltersByOrgAndAssetId() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val item =
             """{"title":"Осмотр","kind":"inspection","interval":{"every":1,"unit":"days"},"criticality":"low"}"""
         client.post("/maintenance-maps") {
@@ -106,7 +106,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun rejectDraftSucceeds() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")
@@ -126,7 +126,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun updateAndConfirmNonDraftFails() = testApplication {
-        application { module(MaintenanceMapStore(), AllowAllAssetChecker) }
+        application { module(MaintenanceMapStore()) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")
@@ -152,7 +152,7 @@ class MaintenanceMapRoutesTest {
 
     @Test
     fun unknownAssetRejected() = testApplication {
-        application { module(MaintenanceMapStore(), AssetChecker { _, _ -> false }) }
+        application { module(MaintenanceMapStore(), assets = AssetLookup { _, _ -> null }) }
         val create =
             client.post("/maintenance-maps") {
                 header("X-Org-Id", "org-1")

@@ -1,10 +1,5 @@
 package pro.masterdoc.dashboard
 
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -16,31 +11,66 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.time.Clock
+import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.hours
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8092
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
+    val mapStore = MaintenanceMapStore()
+    val workOrderStore = WorkOrderStore()
+    val assets = CatalogAssetLookup(catalogBase)
+    val scheduler = PprScheduler(mapStore, workOrderStore, assets)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
-        module(MaintenanceMapStore(), CatalogAssetChecker(catalogBase))
+        module(mapStore, workOrderStore, assets, scheduler)
+        launchHourlyScheduler(scheduler)
     }.start(wait = true)
 }
 
+fun Application.launchHourlyScheduler(scheduler: PprScheduler) {
+    CoroutineScope(Dispatchers.Default).launch {
+        while (isActive) {
+            delay(1.hours)
+            runCatching { scheduler.tick() }
+        }
+    }
+}
+
 fun Application.module(
-    store: MaintenanceMapStore,
-    assetChecker: AssetChecker = AllowAllAssetChecker,
+    mapStore: MaintenanceMapStore,
+    workOrderStore: WorkOrderStore = WorkOrderStore(),
+    assets: AssetLookup = AllowAllAssetLookup,
+    scheduler: PprScheduler =
+        PprScheduler(mapStore, workOrderStore, assets, Clock.systemUTC()),
+    clock: Clock = Clock.systemUTC(),
 ) {
+    val assetChecker = assets.asChecker()
+    val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
     install(ContentNegotiation) {
-        json(Json { ignoreUnknownKeys = true; isLenient = true })
+        json(json)
     }
     install(StatusPages) {
         exception<IllegalArgumentException> { call, cause ->
@@ -52,32 +82,106 @@ fun Application.module(
     }
     routing {
         get("/health") { call.respond(mapOf("status" to "ok")) }
+
         post("/maintenance-maps") {
             val orgId = call.orgId()
             val req = call.receive<CreateMaintenanceMapRequest>()
             if (!assetChecker.exists(orgId, req.assetId)) {
                 throw IllegalArgumentException("Unknown asset: ${req.assetId}")
             }
-            call.respond(HttpStatusCode.Created, store.create(orgId, req))
+            call.respond(HttpStatusCode.Created, mapStore.create(orgId, req))
         }
         get("/maintenance-maps") {
             val orgId = call.orgId()
             val assetId = call.request.queryParameters["assetId"]
-            call.respond(MaintenanceMapList(items = store.list(orgId, assetId)))
+            call.respond(MaintenanceMapList(items = mapStore.list(orgId, assetId)))
         }
         get("/maintenance-maps/{id}") {
-            call.respond(store.get(call.orgId(), call.parameters["id"]!!))
+            call.respond(mapStore.get(call.orgId(), call.parameters["id"]!!))
         }
         patch("/maintenance-maps/{id}") {
             val req = call.receive<UpdateMaintenanceMapRequest>()
-            call.respond(store.update(call.orgId(), call.parameters["id"]!!, req))
+            call.respond(mapStore.update(call.orgId(), call.parameters["id"]!!, req))
         }
         post("/maintenance-maps/{id}/confirm") {
-            call.respond(store.confirm(call.orgId(), call.parameters["id"]!!))
+            val orgId = call.orgId()
+            val confirmed = mapStore.confirm(orgId, call.parameters["id"]!!, Instant.now(clock))
+            scheduler.tick(orgId = orgId, mapId = confirmed.id)
+            call.respond(confirmed)
         }
         post("/maintenance-maps/{id}/reject") {
-            store.reject(call.orgId(), call.parameters["id"]!!)
+            mapStore.reject(call.orgId(), call.parameters["id"]!!)
             call.respond(HttpStatusCode.NoContent)
+        }
+
+        post("/work-orders") {
+            val orgId = call.orgId()
+            val req = call.receive<CreateWorkOrderRequest>()
+            if (assets.siteIdOf(orgId, req.assetId) == null) {
+                throw IllegalArgumentException("Unknown asset: ${req.assetId}")
+            }
+            val source =
+                when (req.source) {
+                    WorkOrderSource.scheduler -> WorkOrderSource.api
+                    else -> req.source
+                }
+            val created =
+                workOrderStore.create(
+                    orgId = orgId,
+                    req = req.copy(source = source),
+                    now = Instant.now(clock),
+                    maps = mapStore,
+                )
+            call.respond(HttpStatusCode.Created, created)
+        }
+        get("/work-orders/board") {
+            val orgId = call.orgId()
+            val weeks = call.request.queryParameters["weeks"]?.toIntOrNull() ?: 4
+            val weekStart =
+                call.request.queryParameters["weekStart"]
+                    ?: WeekDates.format(WeekDates.mondayOnOrBefore(LocalDate.now(clock)))
+            call.respond(workOrderStore.board(orgId, weekStart, weeks))
+        }
+        get("/work-orders/{id}") {
+            call.respond(workOrderStore.get(call.orgId(), call.parameters["id"]!!))
+        }
+        patch("/work-orders/{id}") {
+            val orgId = call.orgId()
+            val id = call.parameters["id"]!!
+            val raw = call.receiveText()
+            val obj = json.parseToJsonElement(raw).jsonObject
+            val status =
+                obj["status"]?.jsonPrimitive?.contentOrNull?.let { WorkOrderStatus.valueOf(it) }
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull
+            val dueAt = obj["dueAt"]?.jsonPrimitive?.contentOrNull
+            val assigneePresent = "assigneeId" in obj
+            val assigneeId =
+                if (assigneePresent) {
+                    when (val node = obj["assigneeId"]) {
+                        null, JsonNull -> null
+                        else -> node.jsonPrimitive.contentOrNull
+                    }
+                } else {
+                    null
+                }
+            call.respond(
+                workOrderStore.update(
+                    orgId = orgId,
+                    id = id,
+                    status = status,
+                    title = title,
+                    dueAt = dueAt,
+                    assigneePresent = assigneePresent,
+                    assigneeId = assigneeId,
+                    now = Instant.now(clock),
+                ),
+            )
+        }
+
+        post("/internal/scheduler/tick") {
+            val orgId = call.request.queryParameters["orgId"]
+            val mapId = call.request.queryParameters["mapId"]
+            call.respond(scheduler.tick(orgId = orgId, mapId = mapId))
         }
     }
 }
@@ -122,6 +226,7 @@ data class MaintenanceMap(
     val status: RecordStatus,
     val source: RecordSource,
     val items: List<MaintenanceMapItem>,
+    val activatedAt: String? = null,
 )
 
 @Serializable
@@ -154,26 +259,6 @@ fun interface AssetChecker {
     fun exists(orgId: String, assetId: String): Boolean
 }
 
-object AllowAllAssetChecker : AssetChecker {
-    override fun exists(orgId: String, assetId: String) = true
-}
-
-class CatalogAssetChecker(private val catalogBaseUrl: String) : AssetChecker {
-    private val client = HttpClient(CIO)
-    override fun exists(orgId: String, assetId: String): Boolean =
-        try {
-            kotlinx.coroutines.runBlocking {
-                val response =
-                    client.get("$catalogBaseUrl/assets/$assetId") {
-                        header("X-Org-Id", orgId)
-                    }
-                response.status == HttpStatusCode.OK
-            }
-        } catch (_: Exception) {
-            false
-        }
-}
-
 class MaintenanceMapStore {
     private val byId = ConcurrentHashMap<String, MaintenanceMap>()
 
@@ -191,7 +276,7 @@ class MaintenanceMapStore {
                 assetId = req.assetId,
                 orgId = orgId,
                 title = req.title.trim(),
-                status = if (source == RecordSource.ai_generated) RecordStatus.draft else RecordStatus.draft,
+                status = RecordStatus.draft,
                 source = source,
                 items = req.items.map { it.toItem() },
             )
@@ -204,6 +289,11 @@ class MaintenanceMapStore {
             .filter { it.orgId == orgId }
             .filter { assetId == null || it.assetId == assetId }
             .sortedBy { it.title }
+
+    fun activeMaps(orgId: String?): List<MaintenanceMap> =
+        byId.values
+            .filter { it.status == RecordStatus.active }
+            .filter { orgId == null || it.orgId == orgId }
 
     fun get(orgId: String, id: String): MaintenanceMap {
         val map = byId[id] ?: throw NoSuchElementException("Map not found")
@@ -223,10 +313,14 @@ class MaintenanceMapStore {
         return updated
     }
 
-    fun confirm(orgId: String, id: String): MaintenanceMap {
+    fun confirm(orgId: String, id: String, now: Instant = Instant.now()): MaintenanceMap {
         val map = get(orgId, id)
         if (map.status != RecordStatus.draft) throw IllegalArgumentException("Only draft maps can be confirmed")
-        val published = map.copy(status = RecordStatus.active)
+        val published =
+            map.copy(
+                status = RecordStatus.active,
+                activatedAt = now.toString(),
+            )
         byId[id] = published
         return published
     }
