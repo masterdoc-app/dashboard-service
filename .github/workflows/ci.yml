@@ -1,7 +1,19 @@
 name: ci
+
 on:
   push:
+    branches: [main, master]
   pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: deploy-dashboard-service-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REMOTE_PATH: /opt/dashboard-service
+  REMOTE_ENV: /etc/masterdoc-dashboard-service/.env
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -13,3 +25,73 @@ jobs:
           java-version: "21"
       - name: Test
         run: ./gradlew test --no-daemon
+
+  deploy:
+    name: Deploy Compose to VPS
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deploy secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$HOST" || { echo "Add secret DEPLOY_HOST"; exit 1; }
+          test -n "$USER_NAME" || { echo "Add secret DEPLOY_USER"; exit 1; }
+          test -n "$KEY" || { echo "Add secret DEPLOY_SSH_PRIVATE_KEY"; exit 1; }
+
+      - name: Load SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+
+      - name: Build runtime .env
+        run: |
+          cat > runtime.env <<'ENV'
+          DASHBOARD_SERVICE_PORT=8092
+          CATALOG_BASE_URL=http://host.docker.internal:8091
+          BOARD_HORIZON_WEEKS=4
+          ENV
+          chmod 600 runtime.env
+
+      - name: Rsync sources and deploy files
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
+            "${USER_NAME}@${HOST}" "mkdir -p ${REMOTE_PATH} /etc/masterdoc-dashboard-service"
+          rsync -avz --delete \
+            -e "ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            --exclude '.git' \
+            --exclude '.gradle' \
+            --exclude 'build' \
+            --exclude 'runtime.env' \
+            ./ "${USER_NAME}@${HOST}:${REMOTE_PATH}/"
+
+      - name: Install .env and Compose up
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_USER }}
+        run: |
+          scp -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
+            runtime.env "${USER_NAME}@${HOST}:${REMOTE_ENV}"
+          ssh -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes "${USER_NAME}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          chmod 600 ${REMOTE_ENV}
+          ln -sfn ${REMOTE_ENV} ${REMOTE_PATH}/deploy/.env
+          cd ${REMOTE_PATH}/deploy
+          docker compose --env-file .env up -d --build --wait
+          curl -sf http://127.0.0.1:8092/health
+          EOF

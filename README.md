@@ -19,8 +19,12 @@ Env: `PORT` (default 8092), `CATALOG_BASE_URL`, `BOARD_HORIZON_WEEKS` (default 4
 
 ## Deploy (VPS)
 
+Push to `main` / `master` → GitHub Actions **test + Compose deploy** to API VPS (`/opt/dashboard-service`).
+
+Manual (emergency only):
+
 ```bash
 cd deploy && docker compose up -d --build --wait
 ```
 
-Gateway reaches the service at `http://host.docker.internal:<port>`.
+Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_PRIVATE_KEY`.
