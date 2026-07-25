@@ -13,6 +13,8 @@ concurrency:
 env:
   REMOTE_PATH: /opt/dashboard-service
   REMOTE_ENV: /etc/masterdoc-dashboard-service/.env
+  IMAGE_NAME: masterdoc-dashboard-service
+  HEALTH_URL: http://127.0.0.1:8092/health
 
 jobs:
   test:
@@ -46,6 +48,11 @@ jobs:
           test -n "$USER_NAME" || { echo "Add secret DEPLOY_USER"; exit 1; }
           test -n "$KEY" || { echo "Add secret DEPLOY_SSH_PRIVATE_KEY"; exit 1; }
 
+      - name: Build image archive
+        run: |
+          docker build -t "${IMAGE_NAME}:${{ github.sha }}" -t "${IMAGE_NAME}:latest" .
+          docker save "${IMAGE_NAME}:${{ github.sha }}" | gzip > /tmp/service.tar.gz
+
       - name: Load SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
@@ -58,40 +65,33 @@ jobs:
 
       - name: Build runtime .env
         run: |
-          cat > runtime.env <<'ENV'
-          DASHBOARD_SERVICE_PORT=8092
-          CATALOG_BASE_URL=http://host.docker.internal:8091
-          BOARD_HORIZON_WEEKS=4
-          ENV
+          printf '%s\n' \
+            'DASHBOARD_SERVICE_PORT=8092' \
+            'CATALOG_BASE_URL=http://host.docker.internal:8091' \
+            'BOARD_HORIZON_WEEKS=4' \
+            > runtime.env
           chmod 600 runtime.env
 
-      - name: Rsync sources and deploy files
+      - name: Rsync deploy files and load image
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER_NAME: ${{ secrets.DEPLOY_USER }}
         run: |
-          ssh -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
-            "${USER_NAME}@${HOST}" "mkdir -p ${REMOTE_PATH} /etc/masterdoc-dashboard-service"
-          rsync -avz --delete \
-            -e "ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes" \
-            --exclude '.git' \
-            --exclude '.gradle' \
-            --exclude 'build' \
-            --exclude 'runtime.env' \
-            ./ "${USER_NAME}@${HOST}:${REMOTE_PATH}/"
-
-      - name: Install .env and Compose up
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER_NAME: ${{ secrets.DEPLOY_USER }}
-        run: |
+          SSH="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o ServerAliveInterval=30"
+          $SSH "${USER_NAME}@${HOST}" "mkdir -p ${REMOTE_PATH}/deploy /etc/masterdoc-dashboard-service"
+          rsync -avz -e "$SSH" \
+            deploy/ "${USER_NAME}@${HOST}:${REMOTE_PATH}/deploy/"
           scp -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
             runtime.env "${USER_NAME}@${HOST}:${REMOTE_ENV}"
-          ssh -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes "${USER_NAME}@${HOST}" bash -s <<EOF
+          scp -i "$HOME/.ssh/deploy_key" -o IdentitiesOnly=yes \
+            /tmp/service.tar.gz "${USER_NAME}@${HOST}:/tmp/${IMAGE_NAME}.tar.gz"
+          $SSH "${USER_NAME}@${HOST}" bash -s <<EOF
           set -euo pipefail
           chmod 600 ${REMOTE_ENV}
           ln -sfn ${REMOTE_ENV} ${REMOTE_PATH}/deploy/.env
+          gunzip -c /tmp/${IMAGE_NAME}.tar.gz | docker load
           cd ${REMOTE_PATH}/deploy
-          docker compose --env-file .env up -d --build --wait
-          curl -sf http://127.0.0.1:8092/health
+          export SERVICE_IMAGE=${IMAGE_NAME}:${{ github.sha }}
+          docker compose --env-file .env up -d --no-build --wait --force-recreate
+          curl -sf ${HEALTH_URL}
           EOF

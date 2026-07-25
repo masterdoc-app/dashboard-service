@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: masterdoc-dashboard-service:latest
+    image: ${SERVICE_IMAGE:-masterdoc-dashboard-service:latest}
     restart: unless-stopped
     ports:
       - "${DASHBOARD_SERVICE_PORT:-8092}:8092"
