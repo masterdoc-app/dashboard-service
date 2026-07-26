@@ -344,6 +344,39 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun createRejectsDurationHoursAbove240AndAccepts240() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val tooLong =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"X","assetId":"a1","siteId":"s1","dueAt":"2026-07-22","durationHours":241}""",
+                )
+            }
+        assertEquals(HttpStatusCode.BadRequest, tooLong.status)
+        assertTrue(tooLong.bodyAsText().contains("durationHours must be <= 240"))
+
+        val max =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"X","assetId":"a1","siteId":"s1","dueAt":"2026-07-22","durationHours":240}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, max.status)
+        assertEquals(
+            240,
+            json.parseToJsonElement(max.bodyAsText()).jsonObject["durationHours"]!!.jsonPrimitive.int,
+        )
+    }
+
+    @Test
     fun patchDurationHours() = testApplication {
         val maps = MaintenanceMapStore()
         val orders = WorkOrderStore()
@@ -369,6 +402,34 @@ class WorkOrderRoutesTest {
             16,
             Json.parseToJsonElement(patched.bodyAsText()).jsonObject["durationHours"]!!.jsonPrimitive.int,
         )
+    }
+
+    @Test
+    fun patchRejectsDurationHoursAbove240() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"X","assetId":"a1","siteId":"s1","dueAt":"2026-07-22","durationHours":240}""",
+                )
+            }
+        val id = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val tooLong =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"durationHours":241}""")
+            }
+        assertEquals(HttpStatusCode.BadRequest, tooLong.status)
+        assertTrue(tooLong.bodyAsText().contains("durationHours must be <= 240"))
+        assertEquals(240, orders.get("o1", id).durationHours)
     }
 
     @Test

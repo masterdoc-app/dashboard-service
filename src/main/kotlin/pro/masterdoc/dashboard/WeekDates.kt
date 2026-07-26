@@ -7,6 +7,9 @@ import java.time.format.DateTimeParseException
 import java.time.temporal.TemporalAdjusters
 
 object WeekDates {
+    /** Maximum supported duration: 30 working days at 8 hours per day. */
+    const val MAX_DURATION_HOURS = 240
+
     private val fmt = DateTimeFormatter.ISO_LOCAL_DATE
 
     fun parseDate(value: String): LocalDate? =
@@ -24,7 +27,8 @@ object WeekDates {
         date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
 
     fun spanWorkingDays(start: LocalDate, durationHours: Int): List<LocalDate> {
-        val spanDays = maxOf(1, (durationHours + 7) / 8) // ceil for positive ints
+        val safeHours = durationHours.coerceIn(1, MAX_DURATION_HOURS)
+        val spanDays = (safeHours + 7) / 8
         val out = ArrayList<LocalDate>(spanDays)
         var d = start
         while (out.size < spanDays) {

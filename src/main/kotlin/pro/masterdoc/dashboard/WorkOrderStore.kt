@@ -96,6 +96,9 @@ class WorkOrderStore {
 
         val hours = req.durationHours ?: 8
         require(hours >= 1) { "durationHours must be >= 1" }
+        require(hours <= WeekDates.MAX_DURATION_HOURS) {
+            "durationHours must be <= ${WeekDates.MAX_DURATION_HOURS}"
+        }
 
         val stamp = now.toString()
         val wo =
@@ -153,6 +156,9 @@ class WorkOrderStore {
         }
         if (durationHours != null) {
             require(durationHours >= 1) { "durationHours must be >= 1" }
+            require(durationHours <= WeekDates.MAX_DURATION_HOURS) {
+                "durationHours must be <= ${WeekDates.MAX_DURATION_HOURS}"
+            }
             next = next.copy(durationHours = durationHours)
         }
         if (assigneePresent) {
