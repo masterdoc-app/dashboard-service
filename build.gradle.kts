@@ -16,6 +16,8 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation-jvm:$ktor")
     implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:$ktor")
     implementation("io.ktor:ktor-server-status-pages-jvm:$ktor")
+    implementation("io.ktor:ktor-server-call-logging-jvm:$ktor")
+    implementation("ch.qos.logback:logback-classic:1.5.16")
     implementation("io.ktor:ktor-client-core-jvm:$ktor")
     implementation("io.ktor:ktor-client-cio-jvm:$ktor")
     testImplementation(kotlin("test"))

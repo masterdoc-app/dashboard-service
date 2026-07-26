@@ -7,6 +7,7 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
@@ -30,6 +31,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.LoggerFactory
+import org.slf4j.event.Level
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -37,13 +40,17 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.hours
 
+private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
+
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8092
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
+    val horizonWeeks = System.getenv("BOARD_HORIZON_WEEKS")?.toIntOrNull() ?: 4
+    log.info("event=startup port=$port catalogBase=$catalogBase horizonWeeks=$horizonWeeks")
     val mapStore = MaintenanceMapStore()
     val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
-    val scheduler = PprScheduler(mapStore, workOrderStore, assets)
+    val scheduler = PprScheduler(mapStore, workOrderStore, assets, horizonWeeks = horizonWeeks)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
         module(mapStore, workOrderStore, assets, scheduler)
         launchHourlyScheduler(scheduler)
@@ -55,6 +62,7 @@ fun Application.launchHourlyScheduler(scheduler: PprScheduler) {
         while (isActive) {
             delay(1.hours)
             runCatching { scheduler.tick() }
+                .onFailure { e -> log.error("event=scheduler_failed", e) }
         }
     }
 }
@@ -70,14 +78,19 @@ fun Application.module(
     val assetChecker = assets.asChecker()
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    install(CallLogging) {
+        level = Level.INFO
+    }
     install(ContentNegotiation) {
         json(json)
     }
     install(StatusPages) {
         exception<IllegalArgumentException> { call, cause ->
+            log.warn("event=bad_request reason=${cause.message}")
             call.respondText(cause.message ?: "Bad Request", status = HttpStatusCode.BadRequest)
         }
         exception<NoSuchElementException> { call, cause ->
+            log.warn("event=not_found reason=${cause.message}")
             call.respondText(cause.message ?: "Not Found", status = HttpStatusCode.NotFound)
         }
     }

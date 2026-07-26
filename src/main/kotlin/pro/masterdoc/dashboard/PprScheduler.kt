@@ -1,9 +1,11 @@
 package pro.masterdoc.dashboard
 
+import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+
+private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard.scheduler")
 
 class PprScheduler(
     private val maps: MaintenanceMapStore,
@@ -70,6 +72,11 @@ class PprScheduler(
                 }
             }
         }
-        return SchedulerTickResult(created = created, skippedNonDays = skippedNonDays)
+        val result = SchedulerTickResult(created = created, skippedNonDays = skippedNonDays)
+        log.info(
+            "event=scheduler_tick created=${result.created} skippedNonDays=${result.skippedNonDays} " +
+                "orgId=${orgId ?: "*"} mapId=${mapId ?: "*"}",
+        )
+        return result
     }
 }

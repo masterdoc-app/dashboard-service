@@ -9,6 +9,9 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard.catalog")
 
 fun interface AssetLookup {
     /** Returns siteId when asset exists in org; null if missing. */
@@ -41,7 +44,8 @@ class CatalogAssetLookup(private val catalogBaseUrl: String) : AssetLookup {
                     ?.content
                     ?.takeIf { it.isNotBlank() }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            log.warn("event=catalog_lookup_failed assetId=$assetId orgId=$orgId error=${e.message}")
             null
         }
 }
