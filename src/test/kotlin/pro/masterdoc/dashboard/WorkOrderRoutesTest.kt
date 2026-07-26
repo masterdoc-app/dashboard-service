@@ -304,6 +304,74 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun createDefaultsDurationHoursTo8() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val res =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Утечка","assetId":"a1","siteId":"s1","dueAt":"2026-07-22"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, res.status)
+        assertEquals(
+            8,
+            Json.parseToJsonElement(res.bodyAsText()).jsonObject["durationHours"]!!.jsonPrimitive.int,
+        )
+    }
+
+    @Test
+    fun createRejectsDurationHoursBelow1() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val res =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"X","assetId":"a1","siteId":"s1","dueAt":"2026-07-22","durationHours":0}""",
+                )
+            }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+    }
+
+    @Test
+    fun patchDurationHours() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Утечка","assetId":"a1","siteId":"s1","dueAt":"2026-07-22"}""",
+                )
+            }
+        val id = Json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        val patched =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "o1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"durationHours":16}""")
+            }
+        assertEquals(
+            16,
+            Json.parseToJsonElement(patched.bodyAsText()).jsonObject["durationHours"]!!.jsonPrimitive.int,
+        )
+    }
+
+    @Test
     fun mondayOnOrBeforeMatchesFixedClock() {
         assertEquals(LocalDate.parse("2026-07-20"), WeekDates.mondayOnOrBefore(LocalDate.parse("2026-07-22")))
         assertFalse(WeekDates.isMonday(LocalDate.parse("2026-07-22")))

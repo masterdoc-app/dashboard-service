@@ -28,6 +28,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Clock
 import java.time.Instant
@@ -154,6 +155,7 @@ fun Application.module(
                 obj["status"]?.jsonPrimitive?.contentOrNull?.let { WorkOrderStatus.valueOf(it) }
             val title = obj["title"]?.jsonPrimitive?.contentOrNull
             val dueAt = obj["dueAt"]?.jsonPrimitive?.contentOrNull
+            val durationHours = obj["durationHours"]?.jsonPrimitive?.intOrNull
             val assigneePresent = "assigneeId" in obj
             val assigneeId =
                 if (assigneePresent) {
@@ -171,6 +173,7 @@ fun Application.module(
                     status = status,
                     title = title,
                     dueAt = dueAt,
+                    durationHours = durationHours,
                     assigneePresent = assigneePresent,
                     assigneeId = assigneeId,
                     now = Instant.now(clock),

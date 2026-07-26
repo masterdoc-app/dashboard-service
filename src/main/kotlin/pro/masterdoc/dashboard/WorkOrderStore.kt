@@ -24,6 +24,7 @@ data class WorkOrder(
     val assetId: String,
     val siteId: String,
     val dueAt: String,
+    val durationHours: Int,
     val assigneeId: String? = null,
     val maintenanceMapId: String? = null,
     val maintenanceMapItemId: String? = null,
@@ -39,6 +40,7 @@ data class CreateWorkOrderRequest(
     val assetId: String,
     val siteId: String,
     val dueAt: String,
+    val durationHours: Int? = null,
     val maintenanceMapId: String? = null,
     val maintenanceMapItemId: String? = null,
     val source: WorkOrderSource = WorkOrderSource.api,
@@ -92,6 +94,9 @@ class WorkOrderStore {
             }
         }
 
+        val hours = req.durationHours ?: 8
+        require(hours >= 1) { "durationHours must be >= 1" }
+
         val stamp = now.toString()
         val wo =
             WorkOrder(
@@ -103,6 +108,7 @@ class WorkOrderStore {
                 assetId = req.assetId,
                 siteId = req.siteId,
                 dueAt = req.dueAt,
+                durationHours = hours,
                 assigneeId = null,
                 maintenanceMapId = req.maintenanceMapId,
                 maintenanceMapItemId = req.maintenanceMapItemId,
@@ -126,6 +132,7 @@ class WorkOrderStore {
         status: WorkOrderStatus? = null,
         title: String? = null,
         dueAt: String? = null,
+        durationHours: Int? = null,
         assigneePresent: Boolean = false,
         assigneeId: String? = null,
         now: Instant = Instant.now(),
@@ -143,6 +150,10 @@ class WorkOrderStore {
         if (dueAt != null) {
             require(WeekDates.parseDate(dueAt) != null) { "dueAt must be YYYY-MM-DD" }
             next = next.copy(dueAt = dueAt)
+        }
+        if (durationHours != null) {
+            require(durationHours >= 1) { "durationHours must be >= 1" }
+            next = next.copy(durationHours = durationHours)
         }
         if (assigneePresent) {
             if (current.status == WorkOrderStatus.closed) {
