@@ -377,4 +377,51 @@ class WorkOrderRoutesTest {
         assertFalse(WeekDates.isMonday(LocalDate.parse("2026-07-22")))
         assertTrue(WeekDates.isMonday(LocalDate.parse("2026-07-20")))
     }
+
+    @Test
+    fun weekDatesSpanFridayThreeWorkdays() {
+        val start = LocalDate.parse("2026-07-24") // Friday
+        val occupied = WeekDates.spanWorkingDays(start, durationHours = 24) // ceil(24/8)=3
+        assertEquals(
+            listOf(
+                LocalDate.parse("2026-07-24"),
+                LocalDate.parse("2026-07-27"),
+                LocalDate.parse("2026-07-28"),
+            ),
+            occupied,
+        )
+    }
+
+    @Test
+    fun boardIncludesWoInNextWeekWhenSpanCrossesWeekend() = testApplication {
+        val maps = MaintenanceMapStore()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Cross-week","assetId":"a1","siteId":"s1","dueAt":"2026-07-24","durationHours":24}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, create.status)
+        val woId = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-27&weeks=1") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, board.status)
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(1, items.size)
+        assertEquals(woId, items[0].jsonObject["id"]!!.jsonPrimitive.content)
+    }
 }

@@ -177,20 +177,21 @@ class WorkOrderStore {
         val inRange =
             byId.values
                 .filter { it.orgId == orgId }
-                .filter { due ->
-                    val d = WeekDates.parseDate(due.dueAt) ?: return@filter false
-                    !d.isBefore(start) && d.isBefore(endExclusive)
+                .filter { wo ->
+                    val d = WeekDates.parseDate(wo.dueAt) ?: return@filter false
+                    val occupied = WeekDates.spanWorkingDays(d, wo.durationHours)
+                    WeekDates.intersectsRange(occupied, start, endExclusive)
                 }
 
         val columns =
             (0 until weeks).map { i ->
                 val ws = start.plusWeeks(i.toLong())
-                val we = ws.plusDays(7)
                 val items =
                     inRange
-                        .filter {
-                            val d = WeekDates.parseDate(it.dueAt)!!
-                            !d.isBefore(ws) && d.isBefore(we)
+                        .filter { wo ->
+                            val d = WeekDates.parseDate(wo.dueAt) ?: return@filter false
+                            val occupied = WeekDates.spanWorkingDays(d, wo.durationHours)
+                            WeekDates.intersectsWeek(occupied, ws)
                         }
                         .sortedWith(compareBy({ it.dueAt }, { it.title }, { it.id }))
                 BoardWeek(weekStart = WeekDates.format(ws), items = items)
