@@ -226,7 +226,7 @@ class WorkOrderStore {
                 WorkOrderStatus.in_progress -> to == WorkOrderStatus.closed
                 WorkOrderStatus.closed -> false
             }
-        if (!ok) throw IllegalArgumentException("Illegal status transition: $from → $to")
+        if (!ok) throw IllegalArgumentException("Illegal status transition: $from -> $to")
         return to
     }
 }
