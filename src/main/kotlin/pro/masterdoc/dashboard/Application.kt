@@ -50,9 +50,10 @@ fun main() {
     val maps = HttpMaintenanceMapGateway(maintenanceBase)
     val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
+    val scopeClient = HttpCatalogScopeClient(catalogBase)
     val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
-        module(maps, workOrderStore, assets, scheduler)
+        module(maps, workOrderStore, assets, scheduler, scopeClient = scopeClient)
         launchHourlyScheduler(scheduler)
     }.start(wait = true)
 }
@@ -74,6 +75,7 @@ fun Application.module(
     scheduler: PprScheduler =
         PprScheduler(maps, workOrderStore, assets, Clock.systemUTC()),
     clock: Clock = Clock.systemUTC(),
+    scopeClient: CatalogScopeClient = AllowAllCatalogScopeClient,
 ) {
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -122,7 +124,12 @@ fun Application.module(
             val weekStart =
                 call.request.queryParameters["weekStart"]
                     ?: WeekDates.format(WeekDates.mondayOnOrBefore(LocalDate.now(clock)))
-            call.respond(workOrderStore.board(orgId, weekStart, weeks))
+            var board = workOrderStore.board(orgId, weekStart, weeks)
+            if (call.scopeFilterEnabled()) {
+                val scope = scopeClient.getUserScope(orgId, call.userId())
+                board = filterBoardByScope(board, scope)
+            }
+            call.respond(board)
         }
         get("/work-orders/{id}") {
             call.respond(workOrderStore.get(call.orgId(), call.parameters["id"]!!))
@@ -147,6 +154,14 @@ fun Application.module(
                 } else {
                     null
                 }
+            if (assigneePresent && assigneeId != null) {
+                val wo = workOrderStore.get(orgId, id)
+                if (!scopeClient.covers(orgId, assigneeId, wo.assetId)) {
+                    throw IllegalArgumentException(
+                        "Assignee scope does not cover this work order's asset",
+                    )
+                }
+            }
             call.respond(
                 workOrderStore.update(
                     orgId = orgId,
@@ -172,3 +187,11 @@ fun Application.module(
 
 private fun io.ktor.server.application.ApplicationCall.orgId(): String =
     request.header("X-Org-Id")?.takeIf { it.isNotBlank() } ?: "default-org"
+
+private fun io.ktor.server.application.ApplicationCall.userId(): String =
+    request.header("X-User-Id")?.takeIf { it.isNotBlank() } ?: "unknown"
+
+private fun io.ktor.server.application.ApplicationCall.scopeFilterEnabled(): Boolean {
+    val value = request.header("X-Scope-Filter")?.trim()?.lowercase() ?: return false
+    return value == "1" || value == "true"
+}

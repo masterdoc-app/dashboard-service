@@ -38,6 +38,26 @@ private class FakeMaintenanceMapGateway(
             .filter { mapId == null || it.id == mapId }
 }
 
+private class FakeCatalogScopeClient(
+    private val scopes: Map<String, UserScopeView> = emptyMap(),
+    private val assetSites: Map<String, String> = emptyMap(),
+) : CatalogScopeClient {
+    private fun scopeKey(orgId: String, userId: String) = "$orgId::$userId"
+
+    private fun assetKey(orgId: String, assetId: String) = "$orgId::$assetId"
+
+    override fun getUserScope(orgId: String, userId: String): UserScopeView =
+        scopes[scopeKey(orgId, userId)] ?: UserScopeView(userId = userId, orgId = orgId)
+
+    override fun covers(orgId: String, userId: String, assetId: String): Boolean {
+        val scope = getUserScope(orgId, userId)
+        if (scope.siteIds.isEmpty() && scope.assetIds.isEmpty()) return false
+        if (assetId in scope.assetIds) return true
+        val siteId = assetSites[assetKey(orgId, assetId)] ?: return false
+        return siteId in scope.siteIds
+    }
+}
+
 class WorkOrderRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val fixedInstant = Instant.parse("2026-07-22T10:00:00Z") // Wednesday
@@ -522,5 +542,297 @@ class WorkOrderRoutesTest {
                 .jsonArray
         assertEquals(1, items.size)
         assertEquals(woId, items[0].jsonObject["id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun boardScopeFilterEmptyScopeReturnsEmptyItems() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(userId = "engineer-1", orgId = "org-1"),
+                    ),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"W1","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+            )
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1") {
+                header("X-Org-Id", "org-1")
+                header("X-Scope-Filter", "1")
+                header("X-User-Id", "engineer-1")
+            }
+        assertEquals(HttpStatusCode.OK, board.status)
+        val weeks = json.parseToJsonElement(board.bodyAsText()).jsonObject["weeks"]!!.jsonArray
+        assertEquals(0, weeks[0].jsonObject["items"]!!.jsonArray.size)
+    }
+
+    @Test
+    fun boardScopeFilterKeepsOnlyInScopeWorkOrders() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                siteIds = listOf("s1"),
+                            ),
+                    ),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"In scope","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+            )
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Out of scope","assetId":"a2","siteId":"s2","dueAt":"2026-07-21"}""",
+            )
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1") {
+                header("X-Org-Id", "org-1")
+                header("X-Scope-Filter", "true")
+                header("X-User-Id", "engineer-1")
+            }
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(1, items.size)
+        assertEquals("In scope", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun boardWithoutScopeFilterReturnsFullBoard() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(userId = "engineer-1", orgId = "org-1"),
+                    ),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        repeat(2) { i ->
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"W$i","assetId":"a$i","siteId":"s$i","dueAt":"2026-07-21"}""",
+                )
+            }
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "engineer-1")
+            }
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(2, items.size)
+    }
+
+    @Test
+    fun patchAssigneeOutOfScopeRejected() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                siteIds = listOf("other-site"),
+                            ),
+                    ),
+                assetSites = mapOf("org-1::a1" to "s1"),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"WO","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+                )
+            }
+        val id = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val rejected =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"assigneeId":"engineer-1"}""")
+            }
+        assertEquals(HttpStatusCode.BadRequest, rejected.status)
+        assertTrue(rejected.bodyAsText().contains("Assignee scope does not cover"))
+    }
+
+    @Test
+    fun patchAssigneeInScopeSucceeds() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                assetIds = listOf("a1"),
+                            ),
+                    ),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"WO","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+                )
+            }
+        val id = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val assign =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"assigneeId":"engineer-1"}""")
+            }
+        assertEquals(HttpStatusCode.OK, assign.status)
+        assertEquals(
+            "engineer-1",
+            json.parseToJsonElement(assign.bodyAsText()).jsonObject["assigneeId"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun patchClearAssigneeSucceedsWithoutScopeCheck() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                assetIds = listOf("a1"),
+                            ),
+                    ),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scope,
+            )
+        }
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"WO","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+                )
+            }
+        val id = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        client.patch("/work-orders/$id") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody("""{"assigneeId":"engineer-1"}""")
+        }
+
+        val cleared =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"assigneeId":null}""")
+            }
+        assertEquals(HttpStatusCode.OK, cleared.status)
+        assertNull(json.parseToJsonElement(cleared.bodyAsText()).jsonObject["assigneeId"])
     }
 }
