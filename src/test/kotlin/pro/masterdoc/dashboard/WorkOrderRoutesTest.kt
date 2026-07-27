@@ -601,12 +601,20 @@ class WorkOrderRoutesTest {
                             ),
                     ),
             )
+        val assets =
+            AssetLookup { _, assetId ->
+                when (assetId) {
+                    "a1" -> "s1"
+                    "a2" -> "s2"
+                    else -> null
+                }
+            }
         application {
             module(
                 maps,
                 orders,
-                AllowAllAssetLookup,
-                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                assets,
+                PprScheduler(maps, orders, assets, clock),
                 clock,
                 scope,
             )
@@ -640,6 +648,107 @@ class WorkOrderRoutesTest {
                 .jsonArray
         assertEquals(1, items.size)
         assertEquals("In scope", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun boardScopeFilterShowsWorkOrderWhenLiveSiteInScopeDespiteStaleWoSiteId() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                siteIds = listOf("s1"),
+                            ),
+                    ),
+            )
+        val assets = AssetLookup { _, _ -> "s1" }
+        application {
+            module(
+                maps,
+                orders,
+                assets,
+                PprScheduler(maps, orders, assets, clock),
+                clock,
+                scope,
+            )
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Moved asset","assetId":"a1","siteId":"s2","dueAt":"2026-07-21"}""",
+            )
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1") {
+                header("X-Org-Id", "org-1")
+                header("X-Scope-Filter", "1")
+                header("X-User-Id", "engineer-1")
+            }
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(1, items.size)
+        assertEquals("Moved asset", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun boardScopeFilterHidesWorkOrderWhenLiveSiteOutOfScopeDespiteMatchingWoSiteId() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scope =
+            FakeCatalogScopeClient(
+                scopes =
+                    mapOf(
+                        "org-1::engineer-1" to
+                            UserScopeView(
+                                userId = "engineer-1",
+                                orgId = "org-1",
+                                siteIds = listOf("s1"),
+                            ),
+                    ),
+            )
+        val assets = AssetLookup { _, _ -> "s2" }
+        application {
+            module(
+                maps,
+                orders,
+                assets,
+                PprScheduler(maps, orders, assets, clock),
+                clock,
+                scope,
+            )
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Stale site on WO","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+            )
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1") {
+                header("X-Org-Id", "org-1")
+                header("X-Scope-Filter", "1")
+                header("X-User-Id", "engineer-1")
+            }
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(0, items.size)
     }
 
     @Test

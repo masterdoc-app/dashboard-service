@@ -127,7 +127,7 @@ fun Application.module(
             var board = workOrderStore.board(orgId, weekStart, weeks)
             if (call.scopeFilterEnabled()) {
                 val scope = scopeClient.getUserScope(orgId, call.userId())
-                board = filterBoardByScope(board, scope)
+                board = filterBoardByScope(board, scope, assets)
             }
             call.respond(board)
         }

@@ -85,21 +85,30 @@ class HttpCatalogScopeClient(
     }
 }
 
-fun filterBoardByScope(board: BoardResponse, scope: UserScopeView): BoardResponse {
+fun filterBoardByScope(
+    board: BoardResponse,
+    scope: UserScopeView,
+    assets: AssetLookup,
+): BoardResponse {
     if (scope.siteIds.isEmpty() && scope.assetIds.isEmpty()) {
         return BoardResponse(weeks = board.weeks.map { it.copy(items = emptyList()) })
     }
     val siteSet = scope.siteIds.toSet()
     val assetSet = scope.assetIds.toSet()
+    val liveSiteCache = mutableMapOf<String, String?>()
+
+    fun inScope(wo: WorkOrder): Boolean {
+        if (wo.assetId in assetSet) return true
+        val liveSiteId =
+            liveSiteCache.getOrPut(wo.assetId) { assets.siteIdOf(scope.orgId, wo.assetId) }
+                ?: return false
+        return liveSiteId in siteSet
+    }
+
     return BoardResponse(
         weeks =
             board.weeks.map { week ->
-                week.copy(
-                    items =
-                        week.items.filter { wo ->
-                            wo.assetId in assetSet || wo.siteId in siteSet
-                        },
-                )
+                week.copy(items = week.items.filter { inScope(it) })
             },
     )
 }
