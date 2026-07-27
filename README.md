@@ -1,6 +1,6 @@
 # dashboard-service
 
-Owns **maintenance maps** (ППР), **work orders**, weekly **board**, and PPR→WO scheduler.
+Owns **work orders**, weekly **board**, and the PPR→WO scheduler. Maintenance maps are owned by `maintenance-service`; this service reads active maps and validates PPR references over HTTP.
 
 Contracts:
 
@@ -15,7 +15,7 @@ Contracts:
 Public via gateway (feature `board`): `POST/GET/PATCH /work-orders`, `GET /work-orders/board`.  
 Internal only: `POST /internal/scheduler/tick` (not proxied).
 
-Env: `PORT` (default 8092), `CATALOG_BASE_URL`, `BOARD_HORIZON_WEEKS` (default 4).
+Env: `PORT` (default 8092), `CATALOG_BASE_URL`, `MAINTENANCE_SERVICE_BASE_URL` (default `http://127.0.0.1:8098`), `BOARD_HORIZON_WEEKS` (default 4).
 
 ## Deploy (VPS)
 

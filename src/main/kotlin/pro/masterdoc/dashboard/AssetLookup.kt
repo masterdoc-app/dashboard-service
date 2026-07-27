@@ -22,10 +22,6 @@ object AllowAllAssetLookup : AssetLookup {
     override fun siteIdOf(orgId: String, assetId: String): String = "default-site"
 }
 
-/** Adapts [AssetLookup] to the map-create asset existence check. */
-fun AssetLookup.asChecker(): AssetChecker =
-    AssetChecker { orgId, assetId -> siteIdOf(orgId, assetId) != null }
-
 class CatalogAssetLookup(private val catalogBaseUrl: String) : AssetLookup {
     private val client = HttpClient(CIO)
     private val json = Json { ignoreUnknownKeys = true }

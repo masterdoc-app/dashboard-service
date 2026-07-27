@@ -25,6 +25,19 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+private class FakeMaintenanceMapGateway(
+    private val maps: List<MaintenanceMapSnapshot> = emptyList(),
+) : MaintenanceMapGateway {
+    override fun get(orgId: String, id: String): MaintenanceMapSnapshot =
+        maps.firstOrNull { it.orgId == orgId && it.id == id }
+            ?: throw NoSuchElementException("Map not found")
+
+    override fun listActive(orgId: String?, mapId: String?): List<MaintenanceMapSnapshot> =
+        maps
+            .filter { orgId == null || it.orgId == orgId }
+            .filter { mapId == null || it.id == mapId }
+}
+
 class WorkOrderRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val fixedInstant = Instant.parse("2026-07-22T10:00:00Z") // Wednesday
@@ -32,7 +45,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun createEmergencyStartsNewWithoutAssignee() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -54,8 +67,16 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun maintenanceMapRoutesAreNotOwned() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        application { module(maps) }
+
+        assertEquals(HttpStatusCode.NotFound, client.get("/maintenance-maps").status)
+    }
+
+    @Test
     fun createRequiresSiteNonBlank() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -71,7 +92,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun unknownAssetRejected() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         val assets = AssetLookup { _, _ -> null }
         application {
@@ -90,22 +111,31 @@ class WorkOrderRoutesTest {
 
     @Test
     fun createPprValidatesMapAndAssetMatch() = testApplication {
-        val maps = MaintenanceMapStore()
+        val mapId = "map-1"
+        val itemId = "item-1"
+        val maps =
+            FakeMaintenanceMapGateway(
+                listOf(
+                    MaintenanceMapSnapshot(
+                        id = mapId,
+                        orgId = "org-1",
+                        assetId = "a1",
+                        activatedAt = "2026-07-01T00:00:00Z",
+                        items =
+                            listOf(
+                                MaintenanceMapItemSnapshot(
+                                    id = itemId,
+                                    title = "Осмотр",
+                                    interval = MaintenanceIntervalSnapshot(30, IntervalUnit.days),
+                                ),
+                            ),
+                    ),
+                ),
+            )
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
-        val mapCreate =
-            client.post("/maintenance-maps") {
-                header("X-Org-Id", "org-1")
-                contentType(ContentType.Application.Json)
-                setBody(
-                    """{"assetId":"a1","title":"Карта","items":[{"title":"Осмотр","kind":"inspection","interval":{"every":30,"unit":"days"},"criticality":"low"}]}""",
-                )
-            }
-        val map = json.parseToJsonElement(mapCreate.bodyAsText()).jsonObject
-        val mapId = map["id"]!!.jsonPrimitive.content
-        val itemId = map["items"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content
 
         val noMap =
             client.post("/work-orders") {
@@ -140,7 +170,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun statusTransitionsAndAssigneePatch() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -207,7 +237,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun boardGroupsByWeekIncludingEmpty() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -244,42 +274,50 @@ class WorkOrderRoutesTest {
 
     @Test
     fun schedulerCreatesFromActiveMapIdempotent() = testApplication {
-        val maps = MaintenanceMapStore()
+        val mapId = "map-1"
+        val maps =
+            FakeMaintenanceMapGateway(
+                listOf(
+                    MaintenanceMapSnapshot(
+                        id = mapId,
+                        orgId = "org-1",
+                        assetId = "a1",
+                        activatedAt = "2026-07-01T00:00:00Z",
+                        items =
+                            listOf(
+                                MaintenanceMapItemSnapshot(
+                                    id = "item-days",
+                                    title = "Ежемесячный осмотр",
+                                    interval = MaintenanceIntervalSnapshot(30, IntervalUnit.days),
+                                ),
+                                MaintenanceMapItemSnapshot(
+                                    id = "item-hours",
+                                    title = "По моточасам",
+                                    interval = MaintenanceIntervalSnapshot(100, IntervalUnit.hours),
+                                ),
+                            ),
+                    ),
+                ),
+            )
         val orders = WorkOrderStore()
         val assets = AssetLookup { _, _ -> "site-42" }
         application {
             module(maps, orders, assets, PprScheduler(maps, orders, assets, clock, horizonWeeks = 8), clock)
         }
-        val mapCreate =
-            client.post("/maintenance-maps") {
-                header("X-Org-Id", "org-1")
-                contentType(ContentType.Application.Json)
-                setBody(
-                    """{"assetId":"a1","title":"Карта","items":[{"title":"Ежемесячный осмотр","kind":"inspection","interval":{"every":30,"unit":"days"},"criticality":"medium"},{"title":"По моточасам","kind":"service","interval":{"every":100,"unit":"hours"},"criticality":"low"}]}""",
-                )
-            }
-        val mapId = json.parseToJsonElement(mapCreate.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
 
-        // Draft: no WO
-        val tickDraft = client.post("/internal/scheduler/tick?orgId=org-1")
-        assertEquals(0, json.parseToJsonElement(tickDraft.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int)
+        val tick = client.post("/internal/scheduler/tick?orgId=org-1&mapId=$mapId")
+        assertTrue(json.parseToJsonElement(tick.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int >= 1)
 
-        val confirm = client.post("/maintenance-maps/$mapId/confirm") { header("X-Org-Id", "org-1") }
-        assertEquals(HttpStatusCode.OK, confirm.status)
-        val activatedAt = json.parseToJsonElement(confirm.bodyAsText()).jsonObject["activatedAt"]
-        assertTrue(activatedAt != null && activatedAt.toString().isNotBlank())
-
-        // Confirm already ticks once
-        val boardAfterConfirm =
+        val boardAfterTick =
             client.get("/work-orders/board?weekStart=2026-07-20&weeks=8") {
                 header("X-Org-Id", "org-1")
             }
-        val itemsAfterConfirm =
-            json.parseToJsonElement(boardAfterConfirm.bodyAsText())
+        val itemsAfterTick =
+            json.parseToJsonElement(boardAfterTick.bodyAsText())
                 .jsonObject["weeks"]!!
                 .jsonArray
                 .sumOf { it.jsonObject["items"]!!.jsonArray.size }
-        assertTrue(itemsAfterConfirm >= 1)
+        assertTrue(itemsAfterTick >= 1)
 
         val tick2 = client.post("/internal/scheduler/tick?orgId=org-1")
         assertEquals(0, json.parseToJsonElement(tick2.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int)
@@ -305,7 +343,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun createDefaultsDurationHoursTo8() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -327,7 +365,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun createRejectsDurationHoursBelow1() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -345,7 +383,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun createRejectsDurationHoursAbove240AndAccepts240() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -378,7 +416,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun patchDurationHours() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -406,7 +444,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun patchRejectsDurationHoursAbove240() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
@@ -455,7 +493,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun boardIncludesWoInNextWeekWhenSpanCrossesWeekend() = testApplication {
-        val maps = MaintenanceMapStore()
+        val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)

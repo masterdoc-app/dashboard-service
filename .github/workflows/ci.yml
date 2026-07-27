@@ -68,6 +68,7 @@ jobs:
           printf '%s\n' \
             'DASHBOARD_SERVICE_PORT=8092' \
             'CATALOG_BASE_URL=http://host.docker.internal:8091' \
+            'MAINTENANCE_SERVICE_BASE_URL=http://host.docker.internal:8098' \
             'BOARD_HORIZON_WEEKS=4' \
             > runtime.env
           chmod 600 runtime.env

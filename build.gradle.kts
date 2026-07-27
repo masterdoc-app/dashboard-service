@@ -20,9 +20,10 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.16")
     implementation("io.ktor:ktor-client-core-jvm:$ktor")
     implementation("io.ktor:ktor-client-cio-jvm:$ktor")
+    implementation("io.ktor:ktor-client-content-negotiation-jvm:$ktor")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host-jvm:$ktor")
-    testImplementation("io.ktor:ktor-client-content-negotiation-jvm:$ktor")
+    testImplementation("io.ktor:ktor-client-mock-jvm:$ktor")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
 }
 

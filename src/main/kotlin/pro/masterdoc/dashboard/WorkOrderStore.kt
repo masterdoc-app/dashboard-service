@@ -68,7 +68,7 @@ class WorkOrderStore {
         orgId: String,
         req: CreateWorkOrderRequest,
         now: Instant = Instant.now(),
-        maps: MaintenanceMapStore? = null,
+        maps: MaintenanceMapGateway? = null,
     ): WorkOrder {
         require(req.title.isNotBlank()) { "title required" }
         require(req.assetId.isNotBlank()) { "assetId required" }

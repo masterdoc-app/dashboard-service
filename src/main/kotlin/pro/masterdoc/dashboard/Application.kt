@@ -24,7 +24,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
@@ -36,8 +35,6 @@ import org.slf4j.event.Level
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.hours
 
 private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
@@ -45,14 +42,17 @@ private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8092
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
+    val maintenanceBase = System.getenv("MAINTENANCE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8098"
     val horizonWeeks = System.getenv("BOARD_HORIZON_WEEKS")?.toIntOrNull() ?: 4
-    log.info("event=startup port=$port catalogBase=$catalogBase horizonWeeks=$horizonWeeks")
-    val mapStore = MaintenanceMapStore()
+    log.info(
+        "event=startup port=$port catalogBase=$catalogBase maintenanceBase=$maintenanceBase horizonWeeks=$horizonWeeks",
+    )
+    val maps = HttpMaintenanceMapGateway(maintenanceBase)
     val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
-    val scheduler = PprScheduler(mapStore, workOrderStore, assets, horizonWeeks = horizonWeeks)
+    val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
-        module(mapStore, workOrderStore, assets, scheduler)
+        module(maps, workOrderStore, assets, scheduler)
         launchHourlyScheduler(scheduler)
     }.start(wait = true)
 }
@@ -68,14 +68,13 @@ fun Application.launchHourlyScheduler(scheduler: PprScheduler) {
 }
 
 fun Application.module(
-    mapStore: MaintenanceMapStore,
+    maps: MaintenanceMapGateway,
     workOrderStore: WorkOrderStore = WorkOrderStore(),
     assets: AssetLookup = AllowAllAssetLookup,
     scheduler: PprScheduler =
-        PprScheduler(mapStore, workOrderStore, assets, Clock.systemUTC()),
+        PprScheduler(maps, workOrderStore, assets, Clock.systemUTC()),
     clock: Clock = Clock.systemUTC(),
 ) {
-    val assetChecker = assets.asChecker()
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     install(CallLogging) {
@@ -97,37 +96,6 @@ fun Application.module(
     routing {
         get("/health") { call.respond(mapOf("status" to "ok")) }
 
-        post("/maintenance-maps") {
-            val orgId = call.orgId()
-            val req = call.receive<CreateMaintenanceMapRequest>()
-            if (!assetChecker.exists(orgId, req.assetId)) {
-                throw IllegalArgumentException("Unknown asset: ${req.assetId}")
-            }
-            call.respond(HttpStatusCode.Created, mapStore.create(orgId, req))
-        }
-        get("/maintenance-maps") {
-            val orgId = call.orgId()
-            val assetId = call.request.queryParameters["assetId"]
-            call.respond(MaintenanceMapList(items = mapStore.list(orgId, assetId)))
-        }
-        get("/maintenance-maps/{id}") {
-            call.respond(mapStore.get(call.orgId(), call.parameters["id"]!!))
-        }
-        patch("/maintenance-maps/{id}") {
-            val req = call.receive<UpdateMaintenanceMapRequest>()
-            call.respond(mapStore.update(call.orgId(), call.parameters["id"]!!, req))
-        }
-        post("/maintenance-maps/{id}/confirm") {
-            val orgId = call.orgId()
-            val confirmed = mapStore.confirm(orgId, call.parameters["id"]!!, Instant.now(clock))
-            scheduler.tick(orgId = orgId, mapId = confirmed.id)
-            call.respond(confirmed)
-        }
-        post("/maintenance-maps/{id}/reject") {
-            mapStore.reject(call.orgId(), call.parameters["id"]!!)
-            call.respond(HttpStatusCode.NoContent)
-        }
-
         post("/work-orders") {
             val orgId = call.orgId()
             val req = call.receive<CreateWorkOrderRequest>()
@@ -144,7 +112,7 @@ fun Application.module(
                     orgId = orgId,
                     req = req.copy(source = source),
                     now = Instant.now(clock),
-                    maps = mapStore,
+                    maps = maps,
                 )
             call.respond(HttpStatusCode.Created, created)
         }
@@ -204,155 +172,3 @@ fun Application.module(
 
 private fun io.ktor.server.application.ApplicationCall.orgId(): String =
     request.header("X-Org-Id")?.takeIf { it.isNotBlank() } ?: "default-org"
-
-@Serializable
-enum class RecordStatus { draft, active }
-
-@Serializable
-enum class RecordSource { manual, ai_generated }
-
-@Serializable
-enum class MapItemKind { inspection, service, overhaul }
-
-@Serializable
-enum class Criticality { low, medium, high }
-
-@Serializable
-enum class IntervalUnit { days, hours, cycles }
-
-@Serializable
-data class Interval(val every: Int, val unit: IntervalUnit)
-
-@Serializable
-data class MaintenanceMapItem(
-    val id: String = UUID.randomUUID().toString(),
-    val title: String,
-    val kind: MapItemKind,
-    val interval: Interval,
-    val criticality: Criticality,
-    val sourceRef: String? = null,
-)
-
-@Serializable
-data class MaintenanceMap(
-    val id: String,
-    val assetId: String,
-    val orgId: String,
-    val title: String,
-    val status: RecordStatus,
-    val source: RecordSource,
-    val items: List<MaintenanceMapItem>,
-    val activatedAt: String? = null,
-)
-
-@Serializable
-data class CreateMaintenanceMapRequest(
-    val assetId: String,
-    val title: String,
-    val items: List<MaintenanceMapItemInput>,
-    val source: RecordSource = RecordSource.manual,
-)
-
-@Serializable
-data class MaintenanceMapItemInput(
-    val title: String,
-    val kind: MapItemKind,
-    val interval: Interval,
-    val criticality: Criticality,
-    val sourceRef: String? = null,
-)
-
-@Serializable
-data class UpdateMaintenanceMapRequest(
-    val title: String? = null,
-    val items: List<MaintenanceMapItemInput>? = null,
-)
-
-@Serializable
-data class MaintenanceMapList(val items: List<MaintenanceMap>)
-
-fun interface AssetChecker {
-    fun exists(orgId: String, assetId: String): Boolean
-}
-
-class MaintenanceMapStore {
-    private val byId = ConcurrentHashMap<String, MaintenanceMap>()
-
-    fun create(orgId: String, req: CreateMaintenanceMapRequest): MaintenanceMap {
-        require(req.title.isNotBlank()) { "title required" }
-        require(req.items.isNotEmpty()) { "items required" }
-        req.items.forEach {
-            require(it.title.isNotBlank()) { "item title required" }
-            require(it.interval.every >= 1) { "interval.every must be >= 1" }
-        }
-        val source = req.source
-        val map =
-            MaintenanceMap(
-                id = UUID.randomUUID().toString(),
-                assetId = req.assetId,
-                orgId = orgId,
-                title = req.title.trim(),
-                status = RecordStatus.draft,
-                source = source,
-                items = req.items.map { it.toItem() },
-            )
-        byId[map.id] = map
-        return map
-    }
-
-    fun list(orgId: String, assetId: String?): List<MaintenanceMap> =
-        byId.values
-            .filter { it.orgId == orgId }
-            .filter { assetId == null || it.assetId == assetId }
-            .sortedBy { it.title }
-
-    fun activeMaps(orgId: String?): List<MaintenanceMap> =
-        byId.values
-            .filter { it.status == RecordStatus.active }
-            .filter { orgId == null || it.orgId == orgId }
-
-    fun get(orgId: String, id: String): MaintenanceMap {
-        val map = byId[id] ?: throw NoSuchElementException("Map not found")
-        if (map.orgId != orgId) throw NoSuchElementException("Map not found")
-        return map
-    }
-
-    fun update(orgId: String, id: String, req: UpdateMaintenanceMapRequest): MaintenanceMap {
-        val map = get(orgId, id)
-        if (map.status != RecordStatus.draft) throw IllegalArgumentException("Only draft maps can be updated")
-        val updated =
-            map.copy(
-                title = req.title?.trim()?.takeIf { it.isNotEmpty() } ?: map.title,
-                items = req.items?.map { it.toItem() } ?: map.items,
-            )
-        byId[id] = updated
-        return updated
-    }
-
-    fun confirm(orgId: String, id: String, now: Instant = Instant.now()): MaintenanceMap {
-        val map = get(orgId, id)
-        if (map.status != RecordStatus.draft) throw IllegalArgumentException("Only draft maps can be confirmed")
-        val published =
-            map.copy(
-                status = RecordStatus.active,
-                activatedAt = now.toString(),
-            )
-        byId[id] = published
-        return published
-    }
-
-    fun reject(orgId: String, id: String) {
-        val map = get(orgId, id)
-        if (map.status != RecordStatus.draft) throw IllegalArgumentException("Only draft maps can be rejected")
-        byId.remove(id)
-    }
-}
-
-private fun MaintenanceMapItemInput.toItem() =
-    MaintenanceMapItem(
-        title = title.trim(),
-        kind = kind,
-        interval = interval,
-        criticality = criticality,
-        sourceRef = sourceRef,
-    )

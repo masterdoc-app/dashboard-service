@@ -8,7 +8,7 @@ import java.time.LocalDate
 private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard.scheduler")
 
 class PprScheduler(
-    private val maps: MaintenanceMapStore,
+    private val maps: MaintenanceMapGateway,
     private val workOrders: WorkOrderStore,
     private val assets: AssetLookup,
     private val clock: Clock = Clock.systemUTC(),
@@ -23,9 +23,7 @@ class PprScheduler(
         var created = 0
         var skippedNonDays = 0
 
-        val candidates =
-            maps.activeMaps(orgId)
-                .filter { mapId == null || it.id == mapId }
+        val candidates = maps.listActive(orgId, mapId)
 
         for (map in candidates) {
             val siteId = assets.siteIdOf(map.orgId, map.assetId) ?: continue
