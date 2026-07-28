@@ -44,18 +44,16 @@ fun main() {
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
     val maintenanceBase = System.getenv("MAINTENANCE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8098"
     val featureBase = System.getenv("FEATURE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8082"
-    val internalServiceToken = System.getenv("INTERNAL_SERVICE_TOKEN").orEmpty()
     val horizonWeeks = System.getenv("BOARD_HORIZON_WEEKS")?.toIntOrNull() ?: 4
     log.info(
         "event=startup port=$port catalogBase=$catalogBase maintenanceBase=$maintenanceBase " +
-            "featureBase=$featureBase internalTokenConfigured=${internalServiceToken.isNotBlank()} " +
-            "horizonWeeks=$horizonWeeks",
+            "featureBase=$featureBase horizonWeeks=$horizonWeeks",
     )
     val maps = HttpMaintenanceMapGateway(maintenanceBase)
     val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
     val scopeClient = HttpCatalogScopeClient(catalogBase)
-    val featureLookup = HttpFeatureLookupClient(featureBase, internalServiceToken)
+    val featureLookup = HttpFeatureLookupClient(featureBase)
     val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
         module(

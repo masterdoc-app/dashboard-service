@@ -64,16 +64,12 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
 
       - name: Build runtime .env
-        env:
-          INTERNAL_SERVICE_TOKEN: ${{ secrets.INTERNAL_SERVICE_TOKEN }}
         run: |
-          test -n "$INTERNAL_SERVICE_TOKEN" || { echo "Add secret INTERNAL_SERVICE_TOKEN"; exit 1; }
           printf '%s\n' \
             'DASHBOARD_SERVICE_PORT=8092' \
             'CATALOG_BASE_URL=http://host.docker.internal:8091' \
             'MAINTENANCE_SERVICE_BASE_URL=http://host.docker.internal:8098' \
             'FEATURE_SERVICE_BASE_URL=http://host.docker.internal:8082' \
-            "INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}" \
             'BOARD_HORIZON_WEEKS=4' \
             > runtime.env
           chmod 600 runtime.env

@@ -15,7 +15,7 @@ Contracts:
 Public via gateway (feature `board`): `POST/GET/PATCH /work-orders`, `GET /work-orders/board`.  
 Internal only: `POST /internal/scheduler/tick` (not proxied).
 
-Env: `PORT` (default 8092), `CATALOG_BASE_URL`, `MAINTENANCE_SERVICE_BASE_URL` (default `http://127.0.0.1:8098`), `FEATURE_SERVICE_BASE_URL` (default `http://127.0.0.1:8082` — target-user feature lookup for assignee eligibility), `INTERNAL_SERVICE_TOKEN` (shared secret; sent as `X-Internal-Token` to feature-service), `BOARD_HORIZON_WEEKS` (default 4).
+Env: `PORT` (default 8092), `CATALOG_BASE_URL`, `MAINTENANCE_SERVICE_BASE_URL` (default `http://127.0.0.1:8098`), `FEATURE_SERVICE_BASE_URL` (default `http://127.0.0.1:8082` — target-user feature lookup for assignee eligibility), `BOARD_HORIZON_WEEKS` (default 4).
 
 ## Deploy (VPS)
 
