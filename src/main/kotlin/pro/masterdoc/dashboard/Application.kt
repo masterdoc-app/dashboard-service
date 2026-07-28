@@ -111,6 +111,10 @@ fun Application.module(
 
         post("/work-orders") {
             val orgId = call.orgId()
+            val callerFeatures = call.callerFeatures()
+            if (callerFeatures != null && "board" !in callerFeatures) {
+                throw IllegalArgumentException("Caller requires board feature to create work orders")
+            }
             val req = call.receive<CreateWorkOrderRequest>()
             if (assets.siteIdOf(orgId, req.assetId) == null) {
                 throw IllegalArgumentException("Unknown asset: ${req.assetId}")
@@ -167,6 +171,16 @@ fun Application.module(
             val dueAt = obj["dueAt"]?.jsonPrimitive?.contentOrNull
             val durationHours = obj["durationHours"]?.jsonPrimitive?.intOrNull
             val assigneePresent = "assigneeId" in obj
+            val callerFeatures = call.callerFeatures()
+            val current = workOrderStore.get(orgId, id)
+            if (assigneePresent && callerFeatures != null && "board" !in callerFeatures) {
+                throw IllegalArgumentException("Caller requires board feature to change assignee")
+            }
+            if (status != null && callerFeatures != null && "board" !in callerFeatures) {
+                if (call.userId() != current.assigneeId) {
+                    throw IllegalArgumentException("Only the assigned engineer may change status")
+                }
+            }
             val assigneeId =
                 if (assigneePresent) {
                     when (val node = obj["assigneeId"]) {
@@ -182,8 +196,7 @@ fun Application.module(
                         "Assignee must have engineer feature",
                     )
                 }
-                val wo = workOrderStore.get(orgId, id)
-                if (!scopeClient.covers(orgId, assigneeId, wo.assetId)) {
+                if (!scopeClient.covers(orgId, assigneeId, current.assetId)) {
                     throw IllegalArgumentException(
                         "Assignee scope does not cover this work order's asset",
                     )
@@ -217,6 +230,9 @@ private fun io.ktor.server.application.ApplicationCall.orgId(): String =
 
 private fun io.ktor.server.application.ApplicationCall.userId(): String =
     request.header("X-User-Id")?.takeIf { it.isNotBlank() } ?: "unknown"
+
+private fun io.ktor.server.application.ApplicationCall.callerFeatures(): Set<String>? =
+    request.header("X-Caller-Features")?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet()
 
 private fun io.ktor.server.application.ApplicationCall.scopeFilterEnabled(): Boolean {
     val value = request.header("X-Scope-Filter")?.trim()?.lowercase() ?: return false
