@@ -129,13 +129,24 @@ fun Application.module(
                 )
             call.respond(HttpStatusCode.Created, created)
         }
+        get("/work-orders") {
+            val orgId = call.orgId()
+            val assigneeId = call.request.queryParameters["assigneeId"]?.takeIf { it.isNotBlank() }
+            var items = workOrderStore.list(orgId, assigneeId)
+            if (call.scopeFilterEnabled()) {
+                val scope = scopeClient.getUserScope(orgId, call.userId())
+                items = filterWorkOrdersByScope(items, scope, assets)
+            }
+            call.respond(items)
+        }
         get("/work-orders/board") {
             val orgId = call.orgId()
             val weeks = call.request.queryParameters["weeks"]?.toIntOrNull() ?: 4
             val weekStart =
                 call.request.queryParameters["weekStart"]
                     ?: WeekDates.format(WeekDates.mondayOnOrBefore(LocalDate.now(clock)))
-            var board = workOrderStore.board(orgId, weekStart, weeks)
+            val assigneeId = call.request.queryParameters["assigneeId"]?.takeIf { it.isNotBlank() }
+            var board = workOrderStore.board(orgId, weekStart, weeks, assigneeId)
             if (call.scopeFilterEnabled()) {
                 val scope = scopeClient.getUserScope(orgId, call.userId())
                 board = filterBoardByScope(board, scope, assets)
@@ -166,9 +177,9 @@ fun Application.module(
                     null
                 }
             if (assigneePresent && assigneeId != null) {
-                if (!featureLookup.hasFeature(orgId, assigneeId, "equipment")) {
+                if (!featureLookup.hasFeature(orgId, assigneeId, "engineer")) {
                     throw IllegalArgumentException(
-                        "Assignee must have equipment feature",
+                        "Assignee must have engineer feature",
                     )
                 }
                 val wo = workOrderStore.get(orgId, id)
