@@ -85,13 +85,13 @@ class HttpCatalogScopeClient(
     }
 }
 
-fun filterBoardByScope(
-    board: BoardResponse,
+fun filterWorkOrdersByScope(
+    items: List<WorkOrder>,
     scope: UserScopeView,
     assets: AssetLookup,
-): BoardResponse {
+): List<WorkOrder> {
     if (scope.siteIds.isEmpty() && scope.assetIds.isEmpty()) {
-        return BoardResponse(weeks = board.weeks.map { it.copy(items = emptyList()) })
+        return emptyList()
     }
     val siteSet = scope.siteIds.toSet()
     val assetSet = scope.assetIds.toSet()
@@ -105,10 +105,17 @@ fun filterBoardByScope(
         return liveSiteId in siteSet
     }
 
-    return BoardResponse(
+    return items.filter { inScope(it) }
+}
+
+fun filterBoardByScope(
+    board: BoardResponse,
+    scope: UserScopeView,
+    assets: AssetLookup,
+): BoardResponse =
+    BoardResponse(
         weeks =
             board.weeks.map { week ->
-                week.copy(items = week.items.filter { inScope(it) })
+                week.copy(items = filterWorkOrdersByScope(week.items, scope, assets))
             },
     )
-}

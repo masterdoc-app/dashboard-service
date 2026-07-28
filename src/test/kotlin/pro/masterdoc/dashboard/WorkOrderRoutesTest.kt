@@ -58,15 +58,15 @@ private class FakeCatalogScopeClient(
     }
 }
 
-/** Fake: only listed userIds have `equipment`. Caller features are irrelevant. */
+/** Fake: only listed userIds have `engineer`. Caller features are irrelevant. */
 private class FakeFeatureLookupClient(
-    private val equipmentUserIds: Set<String> = emptySet(),
+    private val engineerUserIds: Set<String> = emptySet(),
 ) : FeatureLookupClient {
     var lastLookedUpUserId: String? = null
 
     override fun hasFeature(orgId: String, userId: String, feature: String): Boolean {
         lastLookedUpUserId = userId
-        return feature == "equipment" && userId in equipmentUserIds
+        return feature == "engineer" && userId in engineerUserIds
     }
 }
 
@@ -961,7 +961,7 @@ class WorkOrderRoutesTest {
     fun patchAssigneeBoardOnlyRejectedEvenWhenInScope() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
-        val features = FakeFeatureLookupClient(equipmentUserIds = emptySet())
+        val features = FakeFeatureLookupClient(engineerUserIds = emptySet())
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -998,20 +998,20 @@ class WorkOrderRoutesTest {
         val rejected =
             client.patch("/work-orders/$id") {
                 header("X-Org-Id", "org-1")
-                header("X-User-Id", "caller-with-equipment")
+                header("X-User-Id", "caller-with-engineer")
                 contentType(ContentType.Application.Json)
                 setBody("""{"assigneeId":"dispatcher-1"}""")
             }
         assertEquals(HttpStatusCode.BadRequest, rejected.status)
-        assertTrue(rejected.bodyAsText().contains("equipment"))
+        assertTrue(rejected.bodyAsText().contains("engineer"))
         assertEquals("dispatcher-1", features.lastLookedUpUserId)
     }
 
     @Test
-    fun patchAssigneeEquipmentUserInScopeAccepted() = testApplication {
+    fun patchAssigneeEngineerUserInScopeAccepted() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
-        val features = FakeFeatureLookupClient(equipmentUserIds = setOf("engineer-1"))
+        val features = FakeFeatureLookupClient(engineerUserIds = setOf("engineer-1"))
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -1063,7 +1063,7 @@ class WorkOrderRoutesTest {
     fun patchClearAssigneeSucceedsWithoutFeatureLookup() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
-        val features = FakeFeatureLookupClient(equipmentUserIds = setOf("engineer-1"))
+        val features = FakeFeatureLookupClient(engineerUserIds = setOf("engineer-1"))
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -1113,5 +1113,89 @@ class WorkOrderRoutesTest {
         assertEquals(HttpStatusCode.OK, cleared.status)
         assertNull(json.parseToJsonElement(cleared.bodyAsText()).jsonObject["assigneeId"])
         assertNull(features.lastLookedUpUserId)
+    }
+
+    @Test
+    fun listWorkOrdersFilteredByAssigneeId() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val createMine =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Mine","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+                )
+            }
+        val mineId = json.parseToJsonElement(createMine.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        client.patch("/work-orders/$mineId") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody("""{"assigneeId":"engineer-1"}""")
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Other","assetId":"a2","siteId":"s1","dueAt":"2026-07-22"}""",
+            )
+        }
+
+        val filtered =
+            client.get("/work-orders?assigneeId=engineer-1") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, filtered.status)
+        val items = json.parseToJsonElement(filtered.bodyAsText()).jsonArray
+        assertEquals(1, items.size)
+        assertEquals("Mine", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+        assertEquals("engineer-1", items[0].jsonObject["assigneeId"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun boardFilteredByAssigneeId() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val createMine =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Mine","assetId":"a1","siteId":"s1","dueAt":"2026-07-21"}""",
+                )
+            }
+        val mineId = json.parseToJsonElement(createMine.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        client.patch("/work-orders/$mineId") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody("""{"assigneeId":"engineer-1"}""")
+        }
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Unassigned","assetId":"a2","siteId":"s1","dueAt":"2026-07-21"}""",
+            )
+        }
+
+        val board =
+            client.get("/work-orders/board?weekStart=2026-07-20&weeks=1&assigneeId=engineer-1") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, board.status)
+        val items =
+            json.parseToJsonElement(board.bodyAsText())
+                .jsonObject["weeks"]!!
+                .jsonArray[0]
+                .jsonObject["items"]!!
+                .jsonArray
+        assertEquals(1, items.size)
+        assertEquals("Mine", items[0].jsonObject["title"]!!.jsonPrimitive.content)
     }
 }

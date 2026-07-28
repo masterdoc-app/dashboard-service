@@ -174,7 +174,13 @@ class WorkOrderStore {
         return next
     }
 
-    fun board(orgId: String, weekStart: String, weeks: Int): BoardResponse {
+    fun list(orgId: String, assigneeId: String? = null): List<WorkOrder> =
+        byId.values
+            .filter { it.orgId == orgId }
+            .filter { assigneeId == null || it.assigneeId == assigneeId }
+            .sortedWith(compareBy({ it.dueAt }, { it.title }, { it.id }))
+
+    fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }
         val start = WeekDates.parseDate(weekStart) ?: throw IllegalArgumentException("weekStart must be YYYY-MM-DD")
         require(WeekDates.isMonday(start)) { "weekStart must be a Monday" }
@@ -183,6 +189,7 @@ class WorkOrderStore {
         val inRange =
             byId.values
                 .filter { it.orgId == orgId }
+                .filter { assigneeId == null || it.assigneeId == assigneeId }
                 .filter { wo ->
                     val d = WeekDates.parseDate(wo.dueAt) ?: return@filter false
                     val occupied = WeekDates.spanWorkingDays(d, wo.durationHours)
