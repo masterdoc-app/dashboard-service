@@ -268,6 +268,86 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun engineerWorkCycleAssignStartClose() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                featureLookup = FakeFeatureLookupClient(setOf("engineer-1")),
+            )
+        }
+
+        val create =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "board")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Цикл инженера","assetId":"a1","siteId":"s1","dueAt":"2026-07-22"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, create.status)
+        val id = json.parseToJsonElement(create.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val assign =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "board")
+                contentType(ContentType.Application.Json)
+                setBody("""{"assigneeId":"engineer-1"}""")
+            }
+        assertEquals(HttpStatusCode.OK, assign.status)
+
+        val start =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "engineer")
+                header("X-User-Id", "engineer-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"status":"in_progress"}""")
+            }
+        assertEquals(HttpStatusCode.OK, start.status)
+
+        val close =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "engineer")
+                header("X-User-Id", "engineer-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"status":"closed"}""")
+            }
+        assertEquals(HttpStatusCode.OK, close.status)
+
+        val reassign =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "engineer")
+                header("X-User-Id", "engineer-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"assigneeId":"engineer-2"}""")
+            }
+        assertTrue(reassign.status == HttpStatusCode.BadRequest || reassign.status == HttpStatusCode.Forbidden)
+
+        val otherEngineerStatus =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-Caller-Features", "engineer")
+                header("X-User-Id", "engineer-2")
+                contentType(ContentType.Application.Json)
+                setBody("""{"status":"in_progress"}""")
+            }
+        assertTrue(
+            otherEngineerStatus.status == HttpStatusCode.BadRequest ||
+                otherEngineerStatus.status == HttpStatusCode.Forbidden,
+        )
+    }
+
+    @Test
     fun boardGroupsByWeekIncludingEmpty() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
