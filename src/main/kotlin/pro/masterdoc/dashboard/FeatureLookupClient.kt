@@ -30,10 +30,11 @@ private data class UserFeaturesResponse(val features: List<String> = emptyList()
 
 /**
  * Looks up the **target** user's features via feature-service
- * `GET /users/{userId}/features` (+ `X-Org-Id`) — never the caller's JWT/header set.
+ * `GET /users/{userId}/features` (+ `X-Org-Id`, `X-Internal-Token`) — never the caller's JWT.
  */
 class HttpFeatureLookupClient(
     baseUrl: String,
+    private val internalToken: String,
     private val client: HttpClient = defaultClient(),
 ) : FeatureLookupClient {
     private val baseUrl = baseUrl.trimEnd('/')
@@ -44,6 +45,7 @@ class HttpFeatureLookupClient(
                 val response =
                     client.get("$baseUrl/users/$userId/features") {
                         header("X-Org-Id", orgId)
+                        header("X-Internal-Token", internalToken)
                     }
                 when (response.status) {
                     HttpStatusCode.OK -> {
