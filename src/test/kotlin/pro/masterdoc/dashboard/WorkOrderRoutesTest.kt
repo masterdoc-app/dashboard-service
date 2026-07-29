@@ -1303,6 +1303,100 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun ticketsOnlyCreateRejectsOutOfScopeAsset() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scopeClient =
+            FakeCatalogScopeClient(
+                scopes = mapOf("org-1::customer-1" to UserScopeView("customer-1", "org-1", assetIds = listOf("a2"))),
+                assetSites = mapOf("org-1::a1" to "s1", "org-1::a2" to "s1"),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scopeClient = scopeClient,
+            )
+        }
+
+        val res =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Шум","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Сильный шум"}""",
+                )
+            }
+
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+    }
+
+    @Test
+    fun ticketsOnlyCreateRejectsBlankOrMissingDescription() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val bodies =
+            listOf(
+                """{"type":"emergency","title":"Шум","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""",
+                """{"type":"emergency","title":"Шум","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"   "}""",
+            )
+        for (body in bodies) {
+            val res =
+                client.post("/work-orders") {
+                    header("X-Org-Id", "org-1")
+                    header("X-User-Id", "customer-1")
+                    header("X-Caller-Features", "tickets")
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                }
+            assertEquals(HttpStatusCode.BadRequest, res.status)
+        }
+    }
+
+    @Test
+    fun ticketsOnlyCreateAcceptsInScopeAssetWithDescription() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        val scopeClient =
+            FakeCatalogScopeClient(
+                scopes = mapOf("org-1::customer-1" to UserScopeView("customer-1", "org-1", assetIds = listOf("a1"))),
+                assetSites = mapOf("org-1::a1" to "s1"),
+            )
+        application {
+            module(
+                maps,
+                orders,
+                AllowAllAssetLookup,
+                PprScheduler(maps, orders, AllowAllAssetLookup, clock),
+                clock,
+                scopeClient = scopeClient,
+            )
+        }
+
+        val res =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Шум","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Сильный шум"}""",
+                )
+            }
+
+        assertEquals(HttpStatusCode.Created, res.status)
+    }
+
+    @Test
     fun ticketsOnlyListForcesCreatedBySelf() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
@@ -1316,7 +1410,7 @@ class WorkOrderRoutesTest {
                     header("X-User-Id", userId)
                     header("X-Caller-Features", "tickets")
                     contentType(ContentType.Application.Json)
-                    setBody("""{"type":"emergency","title":"$title","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+                    setBody("""{"type":"emergency","title":"$title","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Ticket description"}""")
                 }.bodyAsText(),
             ).jsonObject["id"]!!.jsonPrimitive.content
 
@@ -1347,7 +1441,7 @@ class WorkOrderRoutesTest {
                 header("X-User-Id", "customer-1")
                 header("X-Caller-Features", "tickets")
                 contentType(ContentType.Application.Json)
-                setBody("""{"type":"emergency","title":"Чужая","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+                setBody("""{"type":"emergency","title":"Чужая","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Ticket description"}""")
             }
         val id = json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
         val res =
@@ -1372,7 +1466,7 @@ class WorkOrderRoutesTest {
                 header("X-User-Id", "customer-1")
                 header("X-Caller-Features", "tickets")
                 contentType(ContentType.Application.Json)
-                setBody("""{"type":"emergency","title":"Моя","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+                setBody("""{"type":"emergency","title":"Моя","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Ticket description"}""")
             }
         val id = json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
         val res =

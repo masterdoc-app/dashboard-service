@@ -116,6 +116,14 @@ fun Application.module(
                 throw IllegalArgumentException("Caller requires board or tickets feature to create work orders")
             }
             val req = call.receive<CreateWorkOrderRequest>()
+            if (call.isTicketsOnly()) {
+                if (req.description?.trim().isNullOrBlank()) {
+                    throw IllegalArgumentException("description required for tickets")
+                }
+                if (!scopeClient.covers(orgId, call.userId(), req.assetId)) {
+                    throw IllegalArgumentException("Asset out of caller scope")
+                }
+            }
             if (assets.siteIdOf(orgId, req.assetId) == null) {
                 throw IllegalArgumentException("Unknown asset: ${req.assetId}")
             }
