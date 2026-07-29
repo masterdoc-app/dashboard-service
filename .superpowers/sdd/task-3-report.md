@@ -18,4 +18,6 @@ Implemented `createdBy` and normalized/validated `description` on work orders. T
 
 ## Delivery
 
-Commit and GitHub Actions status will be recorded after push.
+Commit: `c321df6 feat: add ticket work-order ownership and descriptions`
+
+The branch was pushed to `origin/feat/customer-tickets`. No GitHub Actions run was created because `.github/workflows/ci.yml` triggers on `main`/`master` pushes or pull requests targeting those branches; the feature branch has no push workflow trigger. The local targeted route test is the available verification for this branch.
