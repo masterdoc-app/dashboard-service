@@ -1278,4 +1278,111 @@ class WorkOrderRoutesTest {
         assertEquals(1, items.size)
         assertEquals("Mine", items[0].jsonObject["title"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun ticketsCallerCreatesWithCreatedByAndDescription() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val res =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Шум","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Сильный шум подшипника"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, res.status)
+        val body = json.parseToJsonElement(res.bodyAsText()).jsonObject
+        assertEquals("customer-1", body["createdBy"]!!.jsonPrimitive.content)
+        assertEquals("Сильный шум подшипника", body["description"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun ticketsOnlyListForcesCreatedBySelf() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        suspend fun create(userId: String, title: String): String =
+            json.parseToJsonElement(
+                client.post("/work-orders") {
+                    header("X-Org-Id", "org-1")
+                    header("X-User-Id", userId)
+                    header("X-Caller-Features", "tickets")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"type":"emergency","title":"$title","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+                }.bodyAsText(),
+            ).jsonObject["id"]!!.jsonPrimitive.content
+
+        create("customer-1", "Mine")
+        create("customer-2", "Other")
+        val res =
+            client.get("/work-orders?createdBy=customer-2") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+            }
+        assertEquals(HttpStatusCode.OK, res.status)
+        val items = json.parseToJsonElement(res.bodyAsText()).jsonArray
+        assertEquals(1, items.size)
+        assertEquals("Mine", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun ticketsOnlyGetForeignWorkOrderReturns404() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val created =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody("""{"type":"emergency","title":"Чужая","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+            }
+        val id = json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        val res =
+            client.get("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-2")
+                header("X-Caller-Features", "tickets")
+            }
+        assertEquals(HttpStatusCode.NotFound, res.status)
+    }
+
+    @Test
+    fun ticketsOnlyPatchReturns400() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val created =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody("""{"type":"emergency","title":"Моя","assetId":"a1","siteId":"s1","dueAt":"2026-07-29"}""")
+            }
+        val id = json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        val res =
+            client.patch("/work-orders/$id") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody("""{"title":"Изменено"}""")
+            }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+    }
 }

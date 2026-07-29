@@ -28,6 +28,8 @@ data class WorkOrder(
     val assigneeId: String? = null,
     val maintenanceMapId: String? = null,
     val maintenanceMapItemId: String? = null,
+    val createdBy: String? = null,
+    val description: String? = null,
     val source: WorkOrderSource,
     val createdAt: String,
     val updatedAt: String,
@@ -43,6 +45,7 @@ data class CreateWorkOrderRequest(
     val durationHours: Int? = null,
     val maintenanceMapId: String? = null,
     val maintenanceMapItemId: String? = null,
+    val description: String? = null,
     val source: WorkOrderSource = WorkOrderSource.api,
 )
 
@@ -67,6 +70,7 @@ class WorkOrderStore {
     fun create(
         orgId: String,
         req: CreateWorkOrderRequest,
+        createdBy: String? = null,
         now: Instant = Instant.now(),
         maps: MaintenanceMapGateway? = null,
     ): WorkOrder {
@@ -75,6 +79,8 @@ class WorkOrderStore {
         require(req.siteId.isNotBlank()) { "siteId required" }
         require(req.dueAt.isNotBlank()) { "dueAt required" }
         require(WeekDates.parseDate(req.dueAt) != null) { "dueAt must be YYYY-MM-DD" }
+        val description = req.description?.trim()?.takeIf { it.isNotBlank() }
+        require(description == null || description.length <= 4000) { "description too long" }
 
         when (req.type) {
             WorkOrderType.emergency -> {
@@ -115,6 +121,8 @@ class WorkOrderStore {
                 assigneeId = null,
                 maintenanceMapId = req.maintenanceMapId,
                 maintenanceMapItemId = req.maintenanceMapItemId,
+                createdBy = createdBy,
+                description = description,
                 source = req.source,
                 createdAt = stamp,
                 updatedAt = stamp,
@@ -174,10 +182,11 @@ class WorkOrderStore {
         return next
     }
 
-    fun list(orgId: String, assigneeId: String? = null): List<WorkOrder> =
+    fun list(orgId: String, assigneeId: String? = null, createdBy: String? = null): List<WorkOrder> =
         byId.values
             .filter { it.orgId == orgId }
             .filter { assigneeId == null || it.assigneeId == assigneeId }
+            .filter { createdBy == null || it.createdBy == createdBy }
             .sortedWith(compareBy({ it.dueAt }, { it.title }, { it.id }))
 
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {

@@ -112,8 +112,8 @@ fun Application.module(
         post("/work-orders") {
             val orgId = call.orgId()
             val callerFeatures = call.callerFeatures()
-            if (callerFeatures != null && "board" !in callerFeatures) {
-                throw IllegalArgumentException("Caller requires board feature to create work orders")
+            if (callerFeatures != null && "board" !in callerFeatures && "tickets" !in callerFeatures) {
+                throw IllegalArgumentException("Caller requires board or tickets feature to create work orders")
             }
             val req = call.receive<CreateWorkOrderRequest>()
             if (assets.siteIdOf(orgId, req.assetId) == null) {
@@ -128,6 +128,7 @@ fun Application.module(
                 workOrderStore.create(
                     orgId = orgId,
                     req = req.copy(source = source),
+                    createdBy = call.userId(),
                     now = Instant.now(clock),
                     maps = maps,
                 )
@@ -136,7 +137,9 @@ fun Application.module(
         get("/work-orders") {
             val orgId = call.orgId()
             val assigneeId = call.request.queryParameters["assigneeId"]?.takeIf { it.isNotBlank() }
-            var items = workOrderStore.list(orgId, assigneeId)
+            var createdBy = call.request.queryParameters["createdBy"]?.takeIf { it.isNotBlank() }
+            if (call.isTicketsOnly()) createdBy = call.userId()
+            var items = workOrderStore.list(orgId, assigneeId, createdBy)
             if (call.scopeFilterEnabled()) {
                 val scope = scopeClient.getUserScope(orgId, call.userId())
                 items = filterWorkOrdersByScope(items, scope, assets)
@@ -158,9 +161,16 @@ fun Application.module(
             call.respond(board)
         }
         get("/work-orders/{id}") {
-            call.respond(workOrderStore.get(call.orgId(), call.parameters["id"]!!))
+            val workOrder = workOrderStore.get(call.orgId(), call.parameters["id"]!!)
+            if (call.isTicketsOnly() && workOrder.createdBy != call.userId()) {
+                throw NoSuchElementException("Work order not found")
+            }
+            call.respond(workOrder)
         }
         patch("/work-orders/{id}") {
+            if (call.isTicketsOnly()) {
+                throw IllegalArgumentException("tickets cannot modify work orders")
+            }
             val orgId = call.orgId()
             val id = call.parameters["id"]!!
             val raw = call.receiveText()
@@ -233,6 +243,14 @@ private fun io.ktor.server.application.ApplicationCall.userId(): String =
 
 private fun io.ktor.server.application.ApplicationCall.callerFeatures(): Set<String>? =
     request.header("X-Caller-Features")?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet()
+
+private fun io.ktor.server.application.ApplicationCall.isTicketsOnly(): Boolean {
+    val features = callerFeatures() ?: return false
+    return "tickets" in features &&
+        "board" !in features &&
+        "engineer" !in features &&
+        "admin" !in features
+}
 
 private fun io.ktor.server.application.ApplicationCall.scopeFilterEnabled(): Boolean {
     val value = request.header("X-Scope-Filter")?.trim()?.lowercase() ?: return false
