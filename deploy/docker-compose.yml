@@ -14,6 +14,8 @@ services:
       CATALOG_BASE_URL: "${CATALOG_BASE_URL:-http://host.docker.internal:8091}"
       MAINTENANCE_SERVICE_BASE_URL: "${MAINTENANCE_SERVICE_BASE_URL:-http://host.docker.internal:8098}"
       FEATURE_SERVICE_BASE_URL: "${FEATURE_SERVICE_BASE_URL:-http://feature-service:8082}"
+      AI_MESSAGE_SERVICE_BASE_URL: "${AI_MESSAGE_SERVICE_BASE_URL:-http://host.docker.internal:8097}"
+      AI_MESSAGE_INTERNAL_TOKEN: "${AI_MESSAGE_INTERNAL_TOKEN:-}"
       BOARD_HORIZON_WEEKS: "${BOARD_HORIZON_WEEKS:-4}"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8092/health"]

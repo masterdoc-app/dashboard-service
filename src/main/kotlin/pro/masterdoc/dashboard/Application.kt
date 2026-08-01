@@ -25,8 +25,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -44,16 +46,20 @@ fun main() {
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
     val maintenanceBase = System.getenv("MAINTENANCE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8098"
     val featureBase = System.getenv("FEATURE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8082"
+    val aiMessageBase = System.getenv("AI_MESSAGE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8097"
+    val aiMessageToken = System.getenv("AI_MESSAGE_INTERNAL_TOKEN")
     val horizonWeeks = System.getenv("BOARD_HORIZON_WEEKS")?.toIntOrNull() ?: 4
     log.info(
         "event=startup port=$port catalogBase=$catalogBase maintenanceBase=$maintenanceBase " +
-            "featureBase=$featureBase horizonWeeks=$horizonWeeks",
+            "featureBase=$featureBase aiMessageBase=$aiMessageBase horizonWeeks=$horizonWeeks",
     )
     val maps = HttpMaintenanceMapGateway(maintenanceBase)
     val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
     val scopeClient = HttpCatalogScopeClient(catalogBase)
     val featureLookup = HttpFeatureLookupClient(featureBase)
+    val siteLookup = HttpSiteLookupClient(catalogBase)
+    val aiMessages = HttpAiMessageClient(aiMessageBase, aiMessageToken)
     val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
     embeddedServer(Netty, port = port, host = "0.0.0.0") {
         module(
@@ -63,6 +69,8 @@ fun main() {
             scheduler,
             scopeClient = scopeClient,
             featureLookup = featureLookup,
+            siteLookup = siteLookup,
+            aiMessages = aiMessages,
         )
         launchHourlyScheduler(scheduler)
     }.start(wait = true)
@@ -87,6 +95,8 @@ fun Application.module(
     clock: Clock = Clock.systemUTC(),
     scopeClient: CatalogScopeClient = AllowAllCatalogScopeClient,
     featureLookup: FeatureLookupClient = AllowAllFeatureLookupClient,
+    siteLookup: SiteLookupClient = NoopSiteLookupClient,
+    aiMessages: AiMessageClient = NoopAiMessageClient,
 ) {
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -188,6 +198,7 @@ fun Application.module(
             val title = obj["title"]?.jsonPrimitive?.contentOrNull
             val dueAt = obj["dueAt"]?.jsonPrimitive?.contentOrNull
             val durationHours = obj["durationHours"]?.jsonPrimitive?.intOrNull
+            val location = (obj["location"] as? JsonObject)?.toLocationSnapshot()
             val assigneePresent = "assigneeId" in obj
             val callerFeatures = call.callerFeatures()
             val current = workOrderStore.get(orgId, id)
@@ -220,7 +231,7 @@ fun Application.module(
                     )
                 }
             }
-            call.respond(
+            val updated =
                 workOrderStore.update(
                     orgId = orgId,
                     id = id,
@@ -231,8 +242,17 @@ fun Application.module(
                     assigneePresent = assigneePresent,
                     assigneeId = assigneeId,
                     now = Instant.now(clock),
-                ),
-            )
+                )
+            if (current.status == WorkOrderStatus.new && updated.status == WorkOrderStatus.in_progress) {
+                sendGeofenceAiMessage(
+                    workOrder = updated,
+                    engineerId = updated.assigneeId ?: call.userId(),
+                    location = location,
+                    siteLookup = siteLookup,
+                    aiMessages = aiMessages,
+                )
+            }
+            call.respond(updated)
         }
 
         post("/internal/scheduler/tick") {
@@ -263,4 +283,83 @@ private fun io.ktor.server.application.ApplicationCall.isTicketsOnly(): Boolean 
 private fun io.ktor.server.application.ApplicationCall.scopeFilterEnabled(): Boolean {
     val value = request.header("X-Scope-Filter")?.trim()?.lowercase() ?: return false
     return value == "1" || value == "true"
+}
+
+private data class LocationSnapshot(
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Double? = null,
+)
+
+private fun kotlinx.serialization.json.JsonObject.toLocationSnapshot(): LocationSnapshot? {
+    val lat = this["lat"]?.jsonPrimitive?.doubleOrNull ?: return null
+    val lon = this["lon"]?.jsonPrimitive?.doubleOrNull ?: return null
+    val accuracyM = this["accuracyM"]?.jsonPrimitive?.doubleOrNull
+    if (!lat.isFinite() || lat !in -90.0..90.0 || !lon.isFinite() || lon !in -180.0..180.0) return null
+    if (accuracyM != null && (!accuracyM.isFinite() || accuracyM < 0)) return null
+    return LocationSnapshot(lat, lon, accuracyM)
+}
+
+private fun sendGeofenceAiMessage(
+    workOrder: WorkOrder,
+    engineerId: String,
+    location: LocationSnapshot?,
+    siteLookup: SiteLookupClient,
+    aiMessages: AiMessageClient,
+) {
+    runCatching {
+        val site = siteLookup.get(workOrder.orgId, workOrder.siteId) ?: return
+        val siteLat = site.lat ?: return
+        val siteLon = site.lon ?: return
+        val radiusM = site.geofenceRadiusM ?: 200
+        if (location == null) {
+            aiMessages.post(
+                CreateAiMessageRequest(
+                    orgId = workOrder.orgId,
+                    kind = "location_missing",
+                    workOrderId = workOrder.id,
+                    siteId = workOrder.siteId,
+                    engineerId = engineerId,
+                    title = "Нет геолокации при старте",
+                    body = "Заявка ${workOrder.id}: инженер $engineerId начал работу без геолокации.",
+                    radiusM = radiusM,
+                    siteLat = siteLat,
+                    siteLon = siteLon,
+                ),
+            )
+            return
+        }
+        val distanceM = haversineDistanceM(location.lat, location.lon, siteLat, siteLon)
+        if (distanceM <= radiusM + (location.accuracyM ?: 0.0)) return
+        aiMessages.post(
+            CreateAiMessageRequest(
+                orgId = workOrder.orgId,
+                kind = "outside_workshop_radius",
+                workOrderId = workOrder.id,
+                siteId = workOrder.siteId,
+                engineerId = engineerId,
+                title = "Инженер вне цеха",
+                body = "Заявка ${workOrder.id}: инженер $engineerId в ${distanceM.toInt()} м от цеха при радиусе $radiusM м.",
+                distanceM = distanceM,
+                radiusM = radiusM,
+                engineerLat = location.lat,
+                engineerLon = location.lon,
+                siteLat = siteLat,
+                siteLon = siteLon,
+                accuracyM = location.accuracyM,
+            ),
+        )
+    }.onFailure { e ->
+        log.warn("event=geofence_ai_message_failed workOrderId=${workOrder.id} cause=${e.message}")
+    }
+}
+
+private fun haversineDistanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val latDelta = Math.toRadians(lat2 - lat1)
+    val lonDelta = Math.toRadians(lon2 - lon1)
+    val a =
+        kotlin.math.sin(latDelta / 2) * kotlin.math.sin(latDelta / 2) +
+            kotlin.math.cos(Math.toRadians(lat1)) * kotlin.math.cos(Math.toRadians(lat2)) *
+            kotlin.math.sin(lonDelta / 2) * kotlin.math.sin(lonDelta / 2)
+    return 6_371_000.0 * 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
 }
