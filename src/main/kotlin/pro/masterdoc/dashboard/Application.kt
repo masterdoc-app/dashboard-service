@@ -21,6 +21,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -40,6 +41,7 @@ import java.time.LocalDate
 import kotlin.time.Duration.Companion.hours
 
 private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
+private val geofenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8092
@@ -244,13 +246,16 @@ fun Application.module(
                     now = Instant.now(clock),
                 )
             if (current.status == WorkOrderStatus.new && updated.status == WorkOrderStatus.in_progress) {
-                sendGeofenceAiMessage(
-                    workOrder = updated,
-                    engineerId = updated.assigneeId ?: call.userId(),
-                    location = location,
-                    siteLookup = siteLookup,
-                    aiMessages = aiMessages,
-                )
+                val engineerId = updated.assigneeId ?: call.userId()
+                geofenceScope.launch {
+                    sendGeofenceAiMessage(
+                        workOrder = updated,
+                        engineerId = engineerId,
+                        location = location,
+                        siteLookup = siteLookup,
+                        aiMessages = aiMessages,
+                    )
+                }
             }
             call.respond(updated)
         }

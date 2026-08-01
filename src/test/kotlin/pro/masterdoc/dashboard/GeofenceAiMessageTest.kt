@@ -15,12 +15,14 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 class GeofenceAiMessageTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -63,7 +65,7 @@ class GeofenceAiMessageTest {
         val response = client.startWorkOrder("""{"lat":55.01,"lon":37.0,"accuracyM":5}""")
 
         assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals(1, requests.size)
+        awaitUntil { requests.size == 1 }
         val message = json.parseToJsonElement(requests.single()).jsonObject
         assertEquals("outside_workshop_radius", message["kind"]!!.jsonPrimitive.content)
         assertEquals("Инженер вне цеха", message["title"]!!.jsonPrimitive.content)
@@ -83,6 +85,7 @@ class GeofenceAiMessageTest {
         val response = client.startWorkOrder("""{"lat":55.0,"lon":37.0}""")
 
         assertEquals(HttpStatusCode.OK, response.status)
+        delay(150)
         assertTrue(messages.isEmpty())
     }
 
@@ -100,6 +103,7 @@ class GeofenceAiMessageTest {
         val response = client.startWorkOrder()
 
         assertEquals(HttpStatusCode.OK, response.status)
+        awaitUntil { messages.size == 1 }
         assertEquals(listOf("location_missing"), messages.map { it.kind })
         assertEquals("Нет геолокации при старте", messages.single().title)
     }
@@ -118,6 +122,7 @@ class GeofenceAiMessageTest {
         val response = client.startWorkOrder()
 
         assertEquals(HttpStatusCode.OK, response.status)
+        delay(150)
         assertTrue(messages.isEmpty())
     }
 
@@ -134,6 +139,15 @@ class GeofenceAiMessageTest {
         val response = client.startWorkOrder()
 
         assertEquals(HttpStatusCode.OK, response.status)
+        delay(150)
+    }
+
+    private suspend fun awaitUntil(predicate: () -> Boolean) {
+        repeat(50) {
+            if (predicate()) return
+            delay(20)
+        }
+        fail("condition not met in time")
     }
 
     private suspend fun io.ktor.client.HttpClient.startWorkOrder(location: String? = null) =
