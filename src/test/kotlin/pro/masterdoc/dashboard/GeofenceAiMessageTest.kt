@@ -57,7 +57,9 @@ class GeofenceAiMessageTest {
         application {
             module(
                 maps = maps,
-                siteLookup = SiteLookupClient { _, _ -> SiteGeofence("s1", lat = 55.0, lon = 37.0, geofenceRadiusM = 200) },
+                siteLookup = SiteLookupClient { _, _ ->
+                    SiteGeofence("s1", name = "Цех 1", lat = 55.0, lon = 37.0, geofenceRadiusM = 200)
+                },
                 aiMessages = aiClient,
             )
         }
@@ -69,6 +71,11 @@ class GeofenceAiMessageTest {
         val message = json.parseToJsonElement(requests.single()).jsonObject
         assertEquals("outside_workshop_radius", message["kind"]!!.jsonPrimitive.content)
         assertEquals("Инженер вне цеха", message["title"]!!.jsonPrimitive.content)
+        val body = message["body"]!!.jsonPrimitive.content
+        assertTrue(body.contains("«Геозона»"), body)
+        assertTrue(body.contains("«Цех 1»"), body)
+        assertTrue(!body.contains("engineer-1"), body)
+        assertTrue(!body.contains("s1"), body)
     }
 
     @Test
@@ -106,6 +113,7 @@ class GeofenceAiMessageTest {
         awaitUntil { messages.size == 1 }
         assertEquals(listOf("location_missing"), messages.map { it.kind })
         assertEquals("Нет геолокации при старте", messages.single().title)
+        assertEquals("Заявка «Геозона»: начало работы без геолокации.", messages.single().body)
     }
 
     @Test

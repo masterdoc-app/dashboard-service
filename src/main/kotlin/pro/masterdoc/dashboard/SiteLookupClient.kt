@@ -18,6 +18,7 @@ private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard.site")
 @Serializable
 data class SiteGeofence(
     val id: String,
+    val name: String? = null,
     val lat: Double? = null,
     val lon: Double? = null,
     val geofenceRadiusM: Int? = null,

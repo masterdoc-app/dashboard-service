@@ -351,7 +351,15 @@ private fun sendGeofenceAiMessage(
         val siteLat = site.lat ?: return
         val siteLon = site.lon ?: return
         val radiusM = site.geofenceRadiusM ?: 200
+        val workOrderTitle = workOrder.title.trim().ifBlank { "без названия" }
+        val siteName = site.name?.trim()?.takeIf { it.isNotEmpty() }
         if (location == null) {
+            val body =
+                if (siteName != null) {
+                    "Заявка «$workOrderTitle»: начало работы без геолокации ($siteName)."
+                } else {
+                    "Заявка «$workOrderTitle»: начало работы без геолокации."
+                }
             aiMessages.post(
                 CreateAiMessageRequest(
                     orgId = workOrder.orgId,
@@ -360,7 +368,7 @@ private fun sendGeofenceAiMessage(
                     siteId = workOrder.siteId,
                     engineerId = engineerId,
                     title = "Нет геолокации при старте",
-                    body = "Заявка ${workOrder.id}: инженер $engineerId начал работу без геолокации.",
+                    body = body,
                     radiusM = radiusM,
                     siteLat = siteLat,
                     siteLon = siteLon,
@@ -370,6 +378,12 @@ private fun sendGeofenceAiMessage(
         }
         val distanceM = haversineDistanceM(location.lat, location.lon, siteLat, siteLon)
         if (distanceM <= radiusM + (location.accuracyM ?: 0.0)) return
+        val body =
+            if (siteName != null) {
+                "Заявка «$workOrderTitle»: в ${distanceM.toInt()} м от «$siteName» при радиусе $radiusM м."
+            } else {
+                "Заявка «$workOrderTitle»: в ${distanceM.toInt()} м от цеха при радиусе $radiusM м."
+            }
         aiMessages.post(
             CreateAiMessageRequest(
                 orgId = workOrder.orgId,
@@ -378,7 +392,7 @@ private fun sendGeofenceAiMessage(
                 siteId = workOrder.siteId,
                 engineerId = engineerId,
                 title = "Инженер вне цеха",
-                body = "Заявка ${workOrder.id}: инженер $engineerId в ${distanceM.toInt()} м от цеха при радиусе $radiusM м.",
+                body = body,
                 distanceM = distanceM,
                 radiusM = radiusM,
                 engineerLat = location.lat,
