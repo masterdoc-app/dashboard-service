@@ -72,7 +72,7 @@ jobs:
             'CATALOG_BASE_URL=http://host.docker.internal:8091' \
             'MAINTENANCE_SERVICE_BASE_URL=http://host.docker.internal:8098' \
             'FEATURE_SERVICE_BASE_URL=http://feature-service:8082' \
-            'AI_MESSAGE_SERVICE_BASE_URL=http://host.docker.internal:8097' \
+            'AI_MESSAGE_SERVICE_BASE_URL=http://host.docker.internal:8101' \
             "AI_MESSAGE_INTERNAL_TOKEN=$AI_MESSAGE_INTERNAL_TOKEN" \
             'BOARD_HORIZON_WEEKS=4' \
             > runtime.env

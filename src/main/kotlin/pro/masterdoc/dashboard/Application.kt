@@ -46,7 +46,7 @@ fun main() {
     val catalogBase = System.getenv("CATALOG_BASE_URL") ?: "http://127.0.0.1:8091"
     val maintenanceBase = System.getenv("MAINTENANCE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8098"
     val featureBase = System.getenv("FEATURE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8082"
-    val aiMessageBase = System.getenv("AI_MESSAGE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8097"
+    val aiMessageBase = System.getenv("AI_MESSAGE_SERVICE_BASE_URL") ?: "http://127.0.0.1:8101"
     val aiMessageToken = System.getenv("AI_MESSAGE_INTERNAL_TOKEN")
     val horizonWeeks = System.getenv("BOARD_HORIZON_WEEKS")?.toIntOrNull() ?: 4
     log.info(
