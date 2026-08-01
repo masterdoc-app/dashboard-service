@@ -38,6 +38,9 @@ import org.slf4j.event.Level
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import kotlin.time.Duration.Companion.hours
 
 private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
@@ -120,6 +123,19 @@ fun Application.module(
     }
     routing {
         get("/health") { call.respond(mapOf("status" to "ok")) }
+
+        get("/reports/equipment-downtime") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.equipmentDowntime(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                    now = Instant.now(clock),
+                ),
+            )
+        }
 
         post("/work-orders") {
             val orgId = call.orgId()
@@ -264,6 +280,24 @@ fun Application.module(
             val orgId = call.request.queryParameters["orgId"]
             val mapId = call.request.queryParameters["mapId"]
             call.respond(scheduler.tick(orgId = orgId, mapId = mapId))
+        }
+    }
+}
+
+private fun parseReportBoundary(value: String?, isEnd: Boolean): Instant {
+    require(!value.isNullOrBlank()) { "Query parameter '${if (isEnd) "to" else "from"}' is required" }
+    return runCatching { Instant.parse(value) }.getOrElse {
+        runCatching { OffsetDateTime.parse(value).toInstant() }.getOrElse {
+            runCatching {
+                val date = LocalDate.parse(value)
+                date
+                    .atTime(if (isEnd) LocalTime.MAX else LocalTime.MIN)
+                    .toInstant(ZoneOffset.UTC)
+            }.getOrElse {
+                throw IllegalArgumentException(
+                    "Query parameter '${if (isEnd) "to" else "from"}' must be an ISO-8601 instant or date",
+                )
+            }
         }
     }
 }

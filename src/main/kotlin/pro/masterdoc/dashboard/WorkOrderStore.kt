@@ -33,6 +33,18 @@ data class WorkOrder(
     val source: WorkOrderSource,
     val createdAt: String,
     val updatedAt: String,
+    val startedAt: String? = null,
+    val closedAt: String? = null,
+)
+
+@Serializable
+data class DowntimeInterval(
+    val assetId: String,
+    val workOrderId: String,
+    val title: String,
+    val startedAt: String,
+    val closedAt: String? = null,
+    val status: WorkOrderStatus,
 )
 
 @Serializable
@@ -126,6 +138,8 @@ class WorkOrderStore {
                 source = req.source,
                 createdAt = stamp,
                 updatedAt = stamp,
+                startedAt = null,
+                closedAt = null,
             )
         byId[wo.id] = wo
         return wo
@@ -152,7 +166,22 @@ class WorkOrderStore {
         var next = current
 
         if (status != null && status != current.status) {
-            next = next.copy(status = transition(current.status, status))
+            next =
+                next.copy(
+                    status = transition(current.status, status),
+                    startedAt =
+                        if (current.status == WorkOrderStatus.new && status == WorkOrderStatus.in_progress) {
+                            current.startedAt ?: now.toString()
+                        } else {
+                            current.startedAt
+                        },
+                    closedAt =
+                        if (current.status == WorkOrderStatus.in_progress && status == WorkOrderStatus.closed) {
+                            now.toString()
+                        } else {
+                            current.closedAt
+                        },
+                )
         }
         if (title != null) {
             require(title.isNotBlank()) { "title required" }
@@ -188,6 +217,37 @@ class WorkOrderStore {
             .filter { assigneeId == null || it.assigneeId == assigneeId }
             .filter { createdBy == null || it.createdBy == createdBy }
             .sortedWith(compareBy({ it.dueAt }, { it.title }, { it.id }))
+
+    fun equipmentDowntime(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+        now: Instant = Instant.now(),
+    ): List<DowntimeInterval> {
+        require(!to.isBefore(from)) { "to must be on or after from" }
+        return byId.values
+            .asSequence()
+            .filter { it.orgId == orgId && it.startedAt != null }
+            .mapNotNull { workOrder ->
+                val startedAt = parseInstant(workOrder.startedAt!!) ?: return@mapNotNull null
+                val closedAt = workOrder.closedAt?.let(::parseInstant)
+                val end = closedAt ?: now
+                if (startedAt <= to && end >= from) {
+                    DowntimeInterval(
+                        assetId = workOrder.assetId,
+                        workOrderId = workOrder.id,
+                        title = workOrder.title,
+                        startedAt = workOrder.startedAt,
+                        closedAt = workOrder.closedAt,
+                        status = workOrder.status,
+                    )
+                } else {
+                    null
+                }
+            }
+            .sortedBy { it.startedAt }
+            .toList()
+    }
 
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }
@@ -245,4 +305,7 @@ class WorkOrderStore {
         if (!ok) throw IllegalArgumentException("Illegal status transition: $from -> $to")
         return to
     }
+
+    private fun parseInstant(value: String): Instant? =
+        runCatching { Instant.parse(value) }.getOrNull()
 }

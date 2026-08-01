@@ -249,6 +249,9 @@ class WorkOrderRoutesTest {
                 setBody("""{"status":"closed"}""")
             }
         assertEquals(HttpStatusCode.OK, closed.status)
+        val closedJson = json.parseToJsonElement(closed.bodyAsText()).jsonObject
+        assertEquals(fixedInstant.toString(), closedJson["startedAt"]!!.jsonPrimitive.content)
+        assertEquals(fixedInstant.toString(), closedJson["closedAt"]!!.jsonPrimitive.content)
 
         val reassign =
             client.patch("/work-orders/$id") {
@@ -265,6 +268,47 @@ class WorkOrderRoutesTest {
                 setBody("""{"assigneeId":null}""")
             }
         assertEquals(HttpStatusCode.BadRequest, clearAttempt.status)
+    }
+
+    @Test
+    fun equipmentDowntimeFiltersByOverlapAndOrg() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val first =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Overlapping", "asset-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-20T10:00:00Z"),
+            )
+        orders.update("org-1", first.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-22T12:00:00Z"))
+        val second =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Outside", "asset-2", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-20T10:00:00Z"),
+            )
+        orders.update("org-1", second.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-25T00:00:00Z"))
+        orders.update("org-1", second.id, status = WorkOrderStatus.closed, now = Instant.parse("2026-07-25T01:00:00Z"))
+        val otherOrg =
+            orders.create(
+                "org-2",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Other org", "asset-3", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-20T10:00:00Z"),
+            )
+        orders.update("org-2", otherOrg.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-22T12:00:00Z"))
+
+        val response =
+            client.get("/reports/equipment-downtime?from=2026-07-22&to=2026-07-23") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(1, items.size)
+        assertEquals(first.id, items.single().jsonObject["workOrderId"]!!.jsonPrimitive.content)
+        assertEquals("in_progress", items.single().jsonObject["status"]!!.jsonPrimitive.content)
     }
 
     @Test
