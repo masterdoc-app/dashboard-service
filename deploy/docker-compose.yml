@@ -1,16 +1,35 @@
 services:
+  dashboard-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-dashboard}"
+      POSTGRES_USER: "${POSTGRES_USER:-dashboard}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-dashboard}"
+    volumes:
+      - dashboard_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dashboard} -d ${POSTGRES_DB:-dashboard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   dashboard-service:
     build:
       context: ..
       dockerfile: Dockerfile
     image: ${SERVICE_IMAGE:-masterdoc-dashboard-service:latest}
     restart: unless-stopped
+    depends_on:
+      dashboard-postgres:
+        condition: service_healthy
     ports:
       - "${DASHBOARD_SERVICE_PORT:-8092}:8092"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       PORT: "8092"
+      DATABASE_URL: "jdbc:postgresql://dashboard-postgres:5432/${POSTGRES_DB:-dashboard}?user=${POSTGRES_USER:-dashboard}&password=${POSTGRES_PASSWORD:-dashboard}"
       CATALOG_BASE_URL: "${CATALOG_BASE_URL:-http://host.docker.internal:8091}"
       MAINTENANCE_SERVICE_BASE_URL: "${MAINTENANCE_SERVICE_BASE_URL:-http://host.docker.internal:8098}"
       FEATURE_SERVICE_BASE_URL: "${FEATURE_SERVICE_BASE_URL:-http://feature-service:8082}"
@@ -23,3 +42,6 @@ services:
       timeout: 5s
       retries: 6
       start_period: 40s
+
+volumes:
+  dashboard_pg:

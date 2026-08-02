@@ -67,26 +67,28 @@ fun main() {
             "featureBase=$featureBase aiMessageBase=$aiMessageBase horizonWeeks=$horizonWeeks",
     )
     val maps = HttpMaintenanceMapGateway(maintenanceBase)
-    val workOrderStore = WorkOrderStore()
     val assets = CatalogAssetLookup(catalogBase)
     val scopeClient = HttpCatalogScopeClient(catalogBase)
     val featureLookup = HttpFeatureLookupClient(featureBase)
     val siteLookup = HttpSiteLookupClient(catalogBase)
     val aiMessages = HttpAiMessageClient(aiMessageBase, aiMessageToken)
-    val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
-    embeddedServer(Netty, port = port, host = "0.0.0.0") {
-        module(
-            maps,
-            workOrderStore,
-            assets,
-            scheduler,
-            scopeClient = scopeClient,
-            featureLookup = featureLookup,
-            siteLookup = siteLookup,
-            aiMessages = aiMessages,
-        )
-        launchHourlyScheduler(scheduler)
-    }.start(wait = true)
+    Db.connect().use { dataSource ->
+        val workOrderStore = WorkOrderStore(dataSource)
+        val scheduler = PprScheduler(maps, workOrderStore, assets, horizonWeeks = horizonWeeks)
+        embeddedServer(Netty, port = port, host = "0.0.0.0") {
+            module(
+                maps,
+                workOrderStore,
+                assets,
+                scheduler,
+                scopeClient = scopeClient,
+                featureLookup = featureLookup,
+                siteLookup = siteLookup,
+                aiMessages = aiMessages,
+            )
+            launchHourlyScheduler(scheduler)
+        }.start(wait = true)
+    }
 }
 
 fun Application.launchHourlyScheduler(scheduler: PprScheduler) {

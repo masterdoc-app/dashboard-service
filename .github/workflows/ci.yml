@@ -69,6 +69,9 @@ jobs:
         run: |
           printf '%s\n' \
             'DASHBOARD_SERVICE_PORT=8092' \
+            'POSTGRES_DB=dashboard' \
+            'POSTGRES_USER=dashboard' \
+            'POSTGRES_PASSWORD=dashboard' \
             'CATALOG_BASE_URL=http://host.docker.internal:8091' \
             'MAINTENANCE_SERVICE_BASE_URL=http://host.docker.internal:8098' \
             'FEATURE_SERVICE_BASE_URL=http://feature-service:8082' \
