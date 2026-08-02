@@ -1,0 +1,81 @@
+name: Seed Manager Reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      org_id:
+        description: Org to seed
+        required: true
+        default: "383177088934346755"
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Seed manager report work orders for org
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          ORG_ID: ${{ inputs.org_id }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
+            ORG_ID="$ORG_ID" bash -s <<'EOF'
+          set -euo pipefail
+
+          curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/sites >/tmp/sites.json
+          SITE_ID="$(python3 -c 'import json; items=json.load(open("/tmp/sites.json")).get("items") or []; print(items[0]["id"] if items else "")')"
+          if [[ -z "$SITE_ID" ]]; then
+            echo "No sites found for org ${ORG_ID}"
+            exit 1
+          fi
+          echo "SITE_ID=$SITE_ID"
+
+          curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/assets >/tmp/assets.json
+          ASSET_COUNT="$(python3 -c 'import json; print(len(json.load(open("/tmp/assets.json")).get("items") or []))')"
+          if [[ "$ASSET_COUNT" -eq 0 ]]; then
+            echo "No assets found for org ${ORG_ID}. Run catalog-service workflow 'Seed Demo Assets' first."
+            exit 1
+          fi
+          echo "ASSET_COUNT=$ASSET_COUNT"
+
+          BODY="$(SITE_ID="$SITE_ID" python3 - <<'PY'
+          import json, os
+          site_id = os.environ["SITE_ID"]
+          items = json.load(open("/tmp/assets.json")).get("items") or []
+          print(json.dumps({"siteId": site_id, "assetIds": [a["id"] for a in items]}))
+          PY
+          )"
+
+          CODE="$(curl -sS -o /tmp/seed.json -w '%{http_code}' \
+            -X POST -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "http://127.0.0.1:8092/internal/orgs/${ORG_ID}/seed-manager-reports")"
+          echo "POST seed-manager-reports -> $CODE"
+          cat /tmp/seed.json
+          [[ "$CODE" == "200" ]] || exit 1
+
+          python3 - <<'PY'
+          import json
+          r = json.load(open("/tmp/seed.json"))
+          print(f"deleted={r.get('deleted')} created={r.get('created')} orgId={r.get('orgId')}")
+          PY
+
+          FROM="$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=60)).isoformat())')"
+          TO="$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=7)).isoformat())')"
+          curl -sS -H "X-Org-Id: ${ORG_ID}" \
+            "http://127.0.0.1:8092/reports/manager-kpis?from=${FROM}&to=${TO}" >/tmp/kpis.json
+
+          python3 - <<'PY'
+          import json
+          k = json.load(open("/tmp/kpis.json"))
+          print(
+              f"KPIs {k.get('from')}..{k.get('to')}: "
+              f"emergency={k.get('emergencyCount')} planned={k.get('plannedCount')} "
+              f"mttr={k.get('mttrHours')} availability={k.get('availabilityPercent')}%"
+          )
+          PY
+          EOF

@@ -347,6 +347,30 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun seedManagerReportsRoutePopulatesManagerKpis() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val seed =
+            client.post("/internal/orgs/org-1/seed-manager-reports") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"siteId":"ceh-1","assetIds":["asset-a","asset-b"]}""")
+            }
+        assertEquals(HttpStatusCode.OK, seed.status)
+        assertTrue(json.parseToJsonElement(seed.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int >= 8)
+
+        val kpis =
+            client.get("/reports/manager-kpis?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, kpis.status)
+        assertTrue(json.parseToJsonElement(kpis.bodyAsText()).jsonObject["emergencyCount"]!!.jsonPrimitive.int > 0)
+    }
+
+    @Test
     fun engineerWorkCycleAssignStartClose() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
