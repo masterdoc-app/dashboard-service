@@ -312,6 +312,34 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun managerKpisRouteUsesOrgHeaderAndDateBoundaries() = testApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore()
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val emergency =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Авария", "asset-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update("org-1", emergency.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-10T01:00:00Z"))
+
+        val response =
+            client.get("/reports/manager-kpis?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+        assertEquals("2026-07-01", body["from"]!!.jsonPrimitive.content)
+        assertEquals("2026-07-31", body["to"]!!.jsonPrimitive.content)
+        assertEquals(1, body["emergencyCount"]!!.jsonPrimitive.int)
+        assertEquals(1, body["downtimeRanking"]!!.jsonArray.size)
+    }
+
+    @Test
     fun engineerWorkCycleAssignStartClose() = testApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore()
