@@ -310,6 +310,20 @@ fun Application.module(
             val deleted = workOrderStore.clearOrg(orgId)
             call.respond(ClearOrgWorkOrdersResponse(deleted = deleted, orgId = orgId))
         }
+        post("/internal/orgs/{orgId}/seed-manager-reports") {
+            val orgId = call.parameters["orgId"]?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("orgId required")
+            val body = call.receive<SeedManagerReportsRequest>()
+            call.respond(
+                seedManagerReports(
+                    store = workOrderStore,
+                    orgId = orgId,
+                    siteId = body.siteId,
+                    assetIds = body.assetIds,
+                    now = Instant.now(clock),
+                ),
+            )
+        }
     }
 }
 
