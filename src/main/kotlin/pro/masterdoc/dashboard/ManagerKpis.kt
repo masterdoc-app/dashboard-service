@@ -85,8 +85,8 @@ fun computeManagerKpis(
     pprOrders.forEach { order ->
         val closedDate = order.closedAt?.parseInstant()?.atZone(ZoneOffset.UTC)?.toLocalDate()
         when {
-            closedDate != null && closedDate <= order.dueAt.dueAtDate() -> pprOnTime++
-            closedDate != null -> pprLate++
+            order.status == WorkOrderStatus.closed && closedDate != null && closedDate <= order.dueAt.dueAtDate() -> pprOnTime++
+            order.status == WorkOrderStatus.closed && closedDate != null -> pprLate++
             order.dueAt.dueAtDate() < today -> pprOpenOverdue++
             else -> pprOpenPending++
         }
@@ -99,13 +99,18 @@ fun computeManagerKpis(
     val backlogOver30d = ageDays.count { it > 30 }
     val backlogOverdue = backlog.count { it.dueAt.dueAtDate() < today }
 
-    val ranking =
+    val downtimeByAsset =
         orders
             .asSequence()
             .filter { it.type == WorkOrderType.emergency && it.startedAt != null }
             .mapNotNull { order ->
                 val started = order.startedAt!!.parseInstant() ?: return@mapNotNull null
-                val end = order.closedAt?.parseInstant() ?: now
+                val end =
+                    if (order.status == WorkOrderStatus.closed) {
+                        order.closedAt?.parseInstant() ?: now
+                    } else {
+                        now
+                    }
                 val overlapStart = maxInstant(started, from)
                 val overlapEnd = minInstant(end, to)
                 if (overlapEnd <= overlapStart) {
@@ -122,11 +127,13 @@ fun computeManagerKpis(
                     openIntervals = intervals.count { it.third },
                 )
             }
+    val ranking =
+        downtimeByAsset
             .sortedByDescending { it.downtimeHours }
             .take(20)
-    val totalDowntime = ranking.sumOf { it.downtimeHours }
+    val totalDowntime = downtimeByAsset.sumOf { it.downtimeHours }
     val denominatorAssetCount =
-        if (ranking.isNotEmpty()) ranking.map { it.assetId }.distinct().size
+        if (downtimeByAsset.isNotEmpty()) downtimeByAsset.map { it.assetId }.distinct().size
         else periodOrders.map { it.assetId }.distinct().size.coerceAtLeast(1)
     val periodHours = to.hoursSince(from)
     // Availability uses emergency downtime and the ranked-asset count; with no downtime it is always 100%.

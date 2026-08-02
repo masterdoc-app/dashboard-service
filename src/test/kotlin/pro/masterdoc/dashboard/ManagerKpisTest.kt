@@ -17,9 +17,9 @@ class ManagerKpisTest {
                 workOrder("e1", WorkOrderType.emergency, WorkOrderStatus.closed, "asset-a",
                     createdAt = "2026-07-01T00:00:00Z", startedAt = "2026-07-10T00:00:00Z", closedAt = "2026-07-10T04:00:00Z"),
                 workOrder("e2", WorkOrderType.emergency, WorkOrderStatus.closed, "asset-a",
-                    createdAt = "2026-07-02T00:00:00Z", startedAt = "2026-07-20T00:00:00Z", closedAt = "2026-07-20T08:00:00Z"),
+                    createdAt = "2026-07-02T00:00:00Z", startedAt = "2026-07-19T20:00:00Z", closedAt = "2026-07-20T04:00:00Z"),
                 workOrder("e3", WorkOrderType.emergency, WorkOrderStatus.closed, "asset-a",
-                    createdAt = "2026-06-01T00:00:00Z", startedAt = "2026-06-20T00:00:00Z", closedAt = "2026-06-20T02:00:00Z"),
+                    createdAt = "2026-06-01T00:00:00Z", startedAt = "2026-06-20T00:00:00Z", closedAt = "2026-06-20T04:00:00Z"),
                 workOrder("e4", WorkOrderType.emergency, WorkOrderStatus.closed, "asset-b",
                     createdAt = "2026-07-03T00:00:00Z", startedAt = "2026-07-15T00:00:00Z", closedAt = "2026-07-15T06:00:00Z"),
             )
@@ -28,7 +28,7 @@ class ManagerKpisTest {
 
         assertEquals(6.0, result.mttrHours)
         assertEquals(3, result.mttrSampleSize)
-        assertEquals(363.0, result.mtbfHours)
+        assertEquals(360.0, result.mtbfHours)
         assertEquals(1, result.mtbfSampleSize)
     }
 
@@ -38,6 +38,7 @@ class ManagerKpisTest {
             listOf(
                 workOrder("on-time", WorkOrderType.ppr, WorkOrderStatus.closed, dueAt = "2026-07-10", closedAt = "2026-07-10T12:00:00Z"),
                 workOrder("late", WorkOrderType.ppr, WorkOrderStatus.closed, dueAt = "2026-07-10", closedAt = "2026-07-11T00:00:00Z"),
+                workOrder("timestamped-open", WorkOrderType.ppr, WorkOrderStatus.in_progress, dueAt = "2026-07-10", closedAt = "2026-07-12T00:00:00Z"),
                 workOrder("overdue", WorkOrderType.ppr, WorkOrderStatus.in_progress, dueAt = "2026-07-21"),
                 workOrder("pending", WorkOrderType.ppr, WorkOrderStatus.new, dueAt = "2026-07-22"),
                 workOrder("outside", WorkOrderType.ppr, WorkOrderStatus.new, dueAt = "2026-08-01"),
@@ -47,7 +48,7 @@ class ManagerKpisTest {
 
         assertEquals(1, result.pprOnTime)
         assertEquals(1, result.pprLate)
-        assertEquals(1, result.pprOpenOverdue)
+        assertEquals(2, result.pprOpenOverdue)
         assertEquals(1, result.pprOpenPending)
     }
 
@@ -113,6 +114,44 @@ class ManagerKpisTest {
         assertEquals(66.0, result.downtimeRanking.single().downtimeHours)
         assertEquals(1, result.downtimeRanking.single().openIntervals)
         assertEquals(100.0 * (1.0 - 66.0 / (1 * (31 * 24.0))), result.availabilityPercent, 0.001)
+    }
+
+    @Test
+    fun availabilityIncludesDowntimeOutsideTop20Ranking() {
+        val orders =
+            buildList {
+                add(
+                    workOrder(
+                        "largest",
+                        WorkOrderType.emergency,
+                        WorkOrderStatus.closed,
+                        assetId = "asset-largest",
+                        startedAt = "2026-07-01T00:00:00Z",
+                        closedAt = "2026-07-05T04:00:00Z",
+                    ),
+                )
+                repeat(20) { index ->
+                    add(
+                        workOrder(
+                            "small-$index",
+                            WorkOrderType.emergency,
+                            WorkOrderStatus.closed,
+                            assetId = "asset-small-$index",
+                            startedAt = "2026-07-01T00:00:00Z",
+                            closedAt = "2026-07-01T01:00:00Z",
+                        ),
+                    )
+                }
+            }
+
+        val result = computeManagerKpis(orders, from, to, now)
+
+        assertEquals(20, result.downtimeRanking.size)
+        assertEquals(
+            100.0 * (1.0 - 120.0 / (21 * (31 * 24.0))),
+            result.availabilityPercent,
+            0.001,
+        )
     }
 
     @Test
