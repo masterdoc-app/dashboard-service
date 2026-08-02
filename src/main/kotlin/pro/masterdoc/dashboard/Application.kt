@@ -15,6 +15,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
@@ -25,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
@@ -42,6 +44,12 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import kotlin.time.Duration.Companion.hours
+
+@Serializable
+private data class ClearOrgWorkOrdersResponse(
+    val deleted: Int,
+    val orgId: String,
+)
 
 private val log = LoggerFactory.getLogger("pro.masterdoc.dashboard")
 private val geofenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -292,6 +300,13 @@ fun Application.module(
             val orgId = call.request.queryParameters["orgId"]
             val mapId = call.request.queryParameters["mapId"]
             call.respond(scheduler.tick(orgId = orgId, mapId = mapId))
+        }
+
+        delete("/internal/orgs/{orgId}/work-orders") {
+            val orgId = call.parameters["orgId"]?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("orgId required")
+            val deleted = workOrderStore.clearOrg(orgId)
+            call.respond(ClearOrgWorkOrdersResponse(deleted = deleted, orgId = orgId))
         }
     }
 }

@@ -302,6 +302,14 @@ class WorkOrderStore {
                 it.dueAt == dueAt
         }
 
+    /** Removes all work orders for an organization (ops / demo reseed). */
+    fun clearOrg(orgId: String): Int {
+        require(orgId.isNotBlank()) { "orgId required" }
+        val ids = byId.values.filter { it.orgId == orgId }.map { it.id }
+        ids.forEach { byId.remove(it) }
+        return ids.size
+    }
+
     private fun transition(from: WorkOrderStatus, to: WorkOrderStatus): WorkOrderStatus {
         val ok =
             when (from) {
