@@ -103,7 +103,7 @@ fun Application.launchHourlyScheduler(scheduler: PprScheduler) {
 
 fun Application.module(
     maps: MaintenanceMapGateway,
-    workOrderStore: WorkOrderStore = WorkOrderStore(),
+    workOrderStore: WorkOrderStore,
     assets: AssetLookup = AllowAllAssetLookup,
     scheduler: PprScheduler =
         PprScheduler(maps, workOrderStore, assets, Clock.systemUTC()),

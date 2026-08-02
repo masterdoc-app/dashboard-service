@@ -4,7 +4,6 @@ import kotlinx.serialization.Serializable
 import java.sql.ResultSet
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import javax.sql.DataSource
 
 @Serializable
@@ -79,9 +78,8 @@ data class SchedulerTickResult(
 )
 
 class WorkOrderStore(
-    private val dataSource: DataSource? = null,
+    private val dataSource: DataSource,
 ) {
-    private val byId = ConcurrentHashMap<String, WorkOrder>()
 
     fun create(
         orgId: String,
@@ -90,87 +88,22 @@ class WorkOrderStore(
         now: Instant = Instant.now(),
         maps: MaintenanceMapGateway? = null,
     ): WorkOrder {
-        if (dataSource != null) {
-            return createJdbc(orgId, req, createdBy, now, maps)
-        }
-        require(req.title.isNotBlank()) { "title required" }
-        require(req.assetId.isNotBlank()) { "assetId required" }
-        require(req.siteId.isNotBlank()) { "siteId required" }
-        require(req.dueAt.isNotBlank()) { "dueAt required" }
-        require(WeekDates.parseDate(req.dueAt) != null) { "dueAt must be YYYY-MM-DD" }
-        val description = req.description?.trim()?.takeIf { it.isNotBlank() }
-        require(description == null || description.length <= 4000) { "description too long" }
-
-        when (req.type) {
-            WorkOrderType.emergency -> {
-                require(req.maintenanceMapId == null && req.maintenanceMapItemId == null) {
-                    "emergency work orders must not reference PPR"
-                }
-            }
-            WorkOrderType.ppr -> {
-                require(!req.maintenanceMapId.isNullOrBlank()) { "maintenanceMapId required for ppr" }
-                require(!req.maintenanceMapItemId.isNullOrBlank()) { "maintenanceMapItemId required for ppr" }
-                val mapStore = maps ?: throw IllegalArgumentException("PPR validation unavailable")
-                val map = mapStore.get(orgId, req.maintenanceMapId)
-                require(map.assetId == req.assetId) { "assetId must match maintenance map asset" }
-                require(map.items.any { it.id == req.maintenanceMapItemId }) {
-                    "Unknown maintenanceMapItemId"
-                }
-            }
-        }
-
-        val hours = req.durationHours ?: 8
-        require(hours >= 1) { "durationHours must be >= 1" }
-        require(hours <= WeekDates.MAX_DURATION_HOURS) {
-            "durationHours must be <= ${WeekDates.MAX_DURATION_HOURS}"
-        }
-
-        val stamp = now.toString()
-        val wo =
-            WorkOrder(
-                id = UUID.randomUUID().toString(),
-                orgId = orgId,
-                type = req.type,
-                status = WorkOrderStatus.new,
-                title = req.title.trim(),
-                assetId = req.assetId,
-                siteId = req.siteId,
-                dueAt = req.dueAt,
-                durationHours = hours,
-                assigneeId = null,
-                maintenanceMapId = req.maintenanceMapId,
-                maintenanceMapItemId = req.maintenanceMapItemId,
-                createdBy = createdBy,
-                description = description,
-                source = req.source,
-                createdAt = stamp,
-                updatedAt = stamp,
-                startedAt = null,
-                closedAt = null,
-            )
-        byId[wo.id] = wo
-        return wo
+        return createJdbc(orgId, req, createdBy, now, maps)
     }
 
-    fun get(orgId: String, id: String): WorkOrder {
-        if (dataSource != null) {
-            return dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    "SELECT * FROM work_orders WHERE id = ? AND org_id = ?",
-                ).use { statement ->
-                    statement.setString(1, id)
-                    statement.setString(2, orgId)
-                    statement.executeQuery().use { result ->
-                        if (result.next()) result.toWorkOrder()
-                        else throw NoSuchElementException("Work order not found")
-                    }
+    fun get(orgId: String, id: String): WorkOrder =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT * FROM work_orders WHERE id = ? AND org_id = ?",
+            ).use { statement ->
+                statement.setString(1, id)
+                statement.setString(2, orgId)
+                statement.executeQuery().use { result ->
+                    if (result.next()) result.toWorkOrder()
+                    else throw NoSuchElementException("Work order not found")
                 }
             }
         }
-        val wo = byId[id] ?: throw NoSuchElementException("Work order not found")
-        if (wo.orgId != orgId) throw NoSuchElementException("Work order not found")
-        return wo
-    }
 
     fun update(
         orgId: String,
@@ -182,90 +115,31 @@ class WorkOrderStore(
         assigneePresent: Boolean = false,
         assigneeId: String? = null,
         now: Instant = Instant.now(),
-    ): WorkOrder {
-        if (dataSource != null) {
-            return updateJdbc(orgId, id, status, title, dueAt, durationHours, assigneePresent, assigneeId, now)
-        }
-        val current = get(orgId, id)
-        var next = current
+    ): WorkOrder = updateJdbc(orgId, id, status, title, dueAt, durationHours, assigneePresent, assigneeId, now)
 
-        if (status != null && status != current.status) {
-            next =
-                next.copy(
-                    status = transition(current.status, status),
-                    startedAt =
-                        if (current.status == WorkOrderStatus.new && status == WorkOrderStatus.in_progress) {
-                            current.startedAt ?: now.toString()
-                        } else {
-                            current.startedAt
-                        },
-                    closedAt =
-                        if (current.status == WorkOrderStatus.in_progress && status == WorkOrderStatus.closed) {
-                            now.toString()
-                        } else {
-                            current.closedAt
-                        },
-                )
-        }
-        if (title != null) {
-            require(title.isNotBlank()) { "title required" }
-            next = next.copy(title = title.trim())
-        }
-        if (dueAt != null) {
-            require(WeekDates.parseDate(dueAt) != null) { "dueAt must be YYYY-MM-DD" }
-            next = next.copy(dueAt = dueAt)
-        }
-        if (durationHours != null) {
-            require(durationHours >= 1) { "durationHours must be >= 1" }
-            require(durationHours <= WeekDates.MAX_DURATION_HOURS) {
-                "durationHours must be <= ${WeekDates.MAX_DURATION_HOURS}"
+    fun list(orgId: String, assigneeId: String? = null, createdBy: String? = null): List<WorkOrder> =
+        dataSource.connection.use { connection ->
+            val conditions = mutableListOf("org_id = ?")
+            val values = mutableListOf(orgId)
+            if (assigneeId != null) {
+                conditions += "assignee_id = ?"
+                values += assigneeId
             }
-            next = next.copy(durationHours = durationHours)
-        }
-        if (assigneePresent) {
-            if (current.status == WorkOrderStatus.closed) {
-                throw IllegalArgumentException("Cannot change assignee on closed work order")
+            if (createdBy != null) {
+                conditions += "created_by = ?"
+                values += createdBy
             }
-            next = next.copy(assigneeId = assigneeId?.takeIf { it.isNotBlank() })
-        }
-
-        if (next == current) return current
-        next = next.copy(updatedAt = now.toString())
-        byId[id] = next
-        return next
-    }
-
-    fun list(orgId: String, assigneeId: String? = null, createdBy: String? = null): List<WorkOrder> {
-        if (dataSource != null) {
-            return dataSource.connection.use { connection ->
-                val conditions = mutableListOf("org_id = ?")
-                val values = mutableListOf(orgId)
-                if (assigneeId != null) {
-                    conditions += "assignee_id = ?"
-                    values += assigneeId
-                }
-                if (createdBy != null) {
-                    conditions += "created_by = ?"
-                    values += createdBy
-                }
-                connection.prepareStatement(
-                    "SELECT * FROM work_orders WHERE ${conditions.joinToString(" AND ")} ORDER BY due_at, title, id",
-                ).use { statement ->
-                    values.forEachIndexed { index, value -> statement.setString(index + 1, value) }
-                    statement.executeQuery().use { result ->
-                        buildList {
-                            while (result.next()) add(result.toWorkOrder())
-                        }
+            connection.prepareStatement(
+                "SELECT * FROM work_orders WHERE ${conditions.joinToString(" AND ")} ORDER BY due_at, title, id",
+            ).use { statement ->
+                values.forEachIndexed { index, value -> statement.setString(index + 1, value) }
+                statement.executeQuery().use { result ->
+                    buildList {
+                        while (result.next()) add(result.toWorkOrder())
                     }
                 }
             }
         }
-        return byId.values
-            .filter { it.orgId == orgId }
-            .filter { assigneeId == null || it.assigneeId == assigneeId }
-            .filter { createdBy == null || it.createdBy == createdBy }
-            .sortedWith(compareBy({ it.dueAt }, { it.title }, { it.id }))
-    }
 
     fun equipmentDowntime(
         orgId: String,
@@ -353,17 +227,12 @@ class WorkOrderStore(
     /** Removes all work orders for an organization (ops / demo reseed). */
     fun clearOrg(orgId: String): Int {
         require(orgId.isNotBlank()) { "orgId required" }
-        if (dataSource != null) {
-            return dataSource.connection.use { connection ->
-                connection.prepareStatement("DELETE FROM work_orders WHERE org_id = ?").use { statement ->
-                    statement.setString(1, orgId)
-                    statement.executeUpdate()
-                }
+        return dataSource.connection.use { connection ->
+            connection.prepareStatement("DELETE FROM work_orders WHERE org_id = ?").use { statement ->
+                statement.setString(1, orgId)
+                statement.executeUpdate()
             }
         }
-        val ids = byId.values.filter { it.orgId == orgId }.map { it.id }
-        ids.forEach { byId.remove(it) }
-        return ids.size
     }
 
     private fun transition(from: WorkOrderStatus, to: WorkOrderStatus): WorkOrderStatus {
@@ -433,7 +302,7 @@ class WorkOrderStore(
             createdAt = stamp,
             updatedAt = stamp,
         )
-        dataSource!!.connection.use { connection ->
+        dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
                 INSERT INTO work_orders
@@ -533,7 +402,7 @@ class WorkOrderStore(
         }
         if (next == current) return current
         next = next.copy(updatedAt = now.toString())
-        dataSource!!.connection.use { connection ->
+        dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
                 UPDATE work_orders SET status=?, title=?, due_at=?, duration_hours=?, assignee_id=?,

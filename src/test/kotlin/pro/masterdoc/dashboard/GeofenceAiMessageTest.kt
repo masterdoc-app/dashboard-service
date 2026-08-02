@@ -14,17 +14,24 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
+import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.zaxxer.hikari.HikariDataSource
+import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.junit.jupiter.Container
+import org.testcontainers.junit.jupiter.Testcontainers
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
+@Testcontainers(disabledWithoutDocker = true)
 class GeofenceAiMessageTest {
+    private lateinit var dataSource: HikariDataSource
     private val json = Json { ignoreUnknownKeys = true }
     private val maps =
         object : MaintenanceMapGateway {
@@ -35,7 +42,7 @@ class GeofenceAiMessageTest {
         }
 
     @Test
-    fun outsideGeofencePostsAiMessage() = testApplication {
+    fun outsideGeofencePostsAiMessage() = withApplication {
         val requests = mutableListOf<String>()
         val aiClient =
             HttpAiMessageClient(
@@ -57,6 +64,7 @@ class GeofenceAiMessageTest {
         application {
             module(
                 maps = maps,
+                workOrderStore = WorkOrderStore(dataSource),
                 siteLookup = SiteLookupClient { _, _ ->
                     SiteGeofence("s1", name = "Цех 1", lat = 55.0, lon = 37.0, geofenceRadiusM = 200)
                 },
@@ -79,11 +87,12 @@ class GeofenceAiMessageTest {
     }
 
     @Test
-    fun insideGeofenceDoesNotPostAiMessage() = testApplication {
+    fun insideGeofenceDoesNotPostAiMessage() = withApplication {
         val messages = mutableListOf<CreateAiMessageRequest>()
         application {
             module(
                 maps = maps,
+                workOrderStore = WorkOrderStore(dataSource),
                 siteLookup = SiteLookupClient { _, _ -> SiteGeofence("s1", lat = 55.0, lon = 37.0) },
                 aiMessages = AiMessageClient { messages += it },
             )
@@ -97,11 +106,12 @@ class GeofenceAiMessageTest {
     }
 
     @Test
-    fun missingLocationPostsMissingLocationMessage() = testApplication {
+    fun missingLocationPostsMissingLocationMessage() = withApplication {
         val messages = mutableListOf<CreateAiMessageRequest>()
         application {
             module(
                 maps = maps,
+                workOrderStore = WorkOrderStore(dataSource),
                 siteLookup = SiteLookupClient { _, _ -> SiteGeofence("s1", lat = 55.0, lon = 37.0) },
                 aiMessages = AiMessageClient { messages += it },
             )
@@ -117,11 +127,12 @@ class GeofenceAiMessageTest {
     }
 
     @Test
-    fun siteWithoutCoordinatesDoesNotPostAiMessage() = testApplication {
+    fun siteWithoutCoordinatesDoesNotPostAiMessage() = withApplication {
         val messages = mutableListOf<CreateAiMessageRequest>()
         application {
             module(
                 maps = maps,
+                workOrderStore = WorkOrderStore(dataSource),
                 siteLookup = SiteLookupClient { _, _ -> SiteGeofence("s1") },
                 aiMessages = AiMessageClient { messages += it },
             )
@@ -135,10 +146,11 @@ class GeofenceAiMessageTest {
     }
 
     @Test
-    fun aiServiceFailureDoesNotFailStart() = testApplication {
+    fun aiServiceFailureDoesNotFailStart() = withApplication {
         application {
             module(
                 maps = maps,
+                workOrderStore = WorkOrderStore(dataSource),
                 siteLookup = SiteLookupClient { _, _ -> SiteGeofence("s1", lat = 55.0, lon = 37.0) },
                 aiMessages = AiMessageClient { throw IllegalStateException("AI unavailable") },
             )
@@ -158,6 +170,20 @@ class GeofenceAiMessageTest {
         fail("condition not met in time")
     }
 
+    private fun withApplication(block: suspend ApplicationTestBuilder.() -> Unit) {
+        Db.connect(postgres.jdbcUrl, postgres.username, postgres.password).use { connected ->
+            dataSource = connected
+            connected.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("TRUNCATE work_orders")
+                }
+            }
+            testApplication {
+                block()
+            }
+        }
+    }
+
     private suspend fun io.ktor.client.HttpClient.startWorkOrder(location: String? = null) =
         post("/work-orders") {
             header("X-Org-Id", "org-1")
@@ -173,4 +199,13 @@ class GeofenceAiMessageTest {
                 setBody("""{"status":"in_progress"${location?.let { "," + "\"location\":$it" }.orEmpty()}}""")
             }
         }
+
+    companion object {
+        @Container
+        @JvmStatic
+        val postgres = PostgreSQLContainer("postgres:16-alpine")
+            .withDatabaseName("dashboard")
+            .withUsername("dashboard")
+            .withPassword("dashboard")
+    }
 }
