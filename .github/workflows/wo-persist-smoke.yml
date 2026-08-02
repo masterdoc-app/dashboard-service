@@ -1,0 +1,63 @@
+name: WO Persist Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      org_id:
+        description: Org with at least one active asset
+        required: true
+        default: "382715225649971203"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create WO, restart dashboard, verify still present
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          ORG_ID: ${{ inputs.org_id }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
+            "ORG_ID=${ORG_ID}" bash -s <<'EOF'
+          set -euo pipefail
+          ASSET_JSON="$(curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/assets)"
+          eval "$(printf '%s' "$ASSET_JSON" | python3 -c '
+          import json,sys,shlex
+          items=json.load(sys.stdin).get("items") or []
+          active=[a for a in items if a.get("status")=="active"]
+          assert active, "no active assets"
+          a=active[0]
+          print("ASSET_ID="+shlex.quote(a["id"]))
+          print("SITE_ID="+shlex.quote(a["siteId"]))
+          ')"
+          DUE="$(date -u +%F)"
+          CODE="$(curl -sS -o /tmp/wo.json -w "%{http_code}" -X POST \
+            -H "X-Org-Id: ${ORG_ID}" -H "X-User-Id: persist-smoke" \
+            -H "X-Caller-Features: board,tickets" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"emergency\",\"title\":\"Persist smoke\",\"assetId\":\"${ASSET_ID}\",\"siteId\":\"${SITE_ID}\",\"dueAt\":\"${DUE}\",\"description\":\"postgres smoke\"}" \
+            http://127.0.0.1:8092/work-orders)"
+          echo "CREATE=$CODE"
+          [[ "$CODE" == "200" || "$CODE" == "201" ]]
+          WO_ID="$(python3 -c 'import json; print(json.load(open("/tmp/wo.json"))["id"])')"
+          echo "WO_ID=$WO_ID"
+          cd /opt/dashboard-service/deploy
+          docker compose --env-file .env restart dashboard-service
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8092/health >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8092/health >/dev/null
+          GET="$(curl -sS -o /tmp/wo2.json -w "%{http_code}" \
+            -H "X-Org-Id: ${ORG_ID}" -H "X-User-Id: persist-smoke" \
+            -H "X-Caller-Features: board,tickets" \
+            "http://127.0.0.1:8092/work-orders/${WO_ID}")"
+          echo "GET_AFTER_RESTART=$GET"
+          [[ "$GET" == "200" ]]
+          python3 -c 'import json; d=json.load(open("/tmp/wo2.json")); assert d["title"]=="Persist smoke"; print("OK", d["id"])'
+          EOF
