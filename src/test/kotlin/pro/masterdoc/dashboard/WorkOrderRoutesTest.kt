@@ -10,6 +10,11 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
+import io.ktor.server.testing.ApplicationTestBuilder
+import com.zaxxer.hikari.HikariDataSource
+import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.junit.jupiter.Container
+import org.testcontainers.junit.jupiter.Testcontainers
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -70,15 +75,17 @@ private class FakeFeatureLookupClient(
     }
 }
 
+@Testcontainers(disabledWithoutDocker = true)
 class WorkOrderRoutesTest {
+    private lateinit var dataSource: HikariDataSource
     private val json = Json { ignoreUnknownKeys = true }
     private val fixedInstant = Instant.parse("2026-07-22T10:00:00Z") // Wednesday
     private val clock = Clock.fixed(fixedInstant, ZoneOffset.UTC)
 
     @Test
-    fun createEmergencyStartsNewWithoutAssignee() = testApplication {
+    fun createEmergencyStartsNewWithoutAssignee() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -99,17 +106,17 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun maintenanceMapRoutesAreNotOwned() = testApplication {
+    fun maintenanceMapRoutesAreNotOwned() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        application { module(maps) }
+        application { module(maps, WorkOrderStore(dataSource)) }
 
         assertEquals(HttpStatusCode.NotFound, client.get("/maintenance-maps").status)
     }
 
     @Test
-    fun createRequiresSiteNonBlank() = testApplication {
+    fun createRequiresSiteNonBlank() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -123,9 +130,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun unknownAssetRejected() = testApplication {
+    fun unknownAssetRejected() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val assets = AssetLookup { _, _ -> null }
         application {
             module(maps, orders, assets, PprScheduler(maps, orders, assets, clock), clock)
@@ -142,7 +149,7 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun createPprValidatesMapAndAssetMatch() = testApplication {
+    fun createPprValidatesMapAndAssetMatch() = withApplication {
         val mapId = "map-1"
         val itemId = "item-1"
         val maps =
@@ -164,7 +171,7 @@ class WorkOrderRoutesTest {
                     ),
                 ),
             )
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -201,9 +208,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun statusTransitionsAndAssigneePatch() = testApplication {
+    fun statusTransitionsAndAssigneePatch() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -271,9 +278,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun equipmentDowntimeFiltersByOverlapAndOrg() = testApplication {
+    fun equipmentDowntimeFiltersByOverlapAndOrg() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -312,9 +319,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun managerKpisRouteUsesOrgHeaderAndDateBoundaries() = testApplication {
+    fun managerKpisRouteUsesOrgHeaderAndDateBoundaries() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -340,9 +347,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun engineerWorkCycleAssignStartClose() = testApplication {
+    fun engineerWorkCycleAssignStartClose() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(
                 maps,
@@ -420,9 +427,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardGroupsByWeekIncludingEmpty() = testApplication {
+    fun boardGroupsByWeekIncludingEmpty() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -457,7 +464,7 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun schedulerCreatesFromActiveMapIdempotent() = testApplication {
+    fun schedulerCreatesFromActiveMapIdempotent() = withApplication {
         val mapId = "map-1"
         val maps =
             FakeMaintenanceMapGateway(
@@ -483,7 +490,7 @@ class WorkOrderRoutesTest {
                     ),
                 ),
             )
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val assets = AssetLookup { _, _ -> "site-42" }
         application {
             module(maps, orders, assets, PprScheduler(maps, orders, assets, clock, horizonWeeks = 8), clock)
@@ -526,9 +533,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun createDefaultsDurationHoursTo8() = testApplication {
+    fun createDefaultsDurationHoursTo8() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -548,9 +555,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun createRejectsDurationHoursBelow1() = testApplication {
+    fun createRejectsDurationHoursBelow1() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -566,9 +573,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun createRejectsDurationHoursAbove240AndAccepts240() = testApplication {
+    fun createRejectsDurationHoursAbove240AndAccepts240() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -599,9 +606,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchDurationHours() = testApplication {
+    fun patchDurationHours() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -627,9 +634,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchRejectsDurationHoursAbove240() = testApplication {
+    fun patchRejectsDurationHoursAbove240() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -676,9 +683,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardIncludesWoInNextWeekWhenSpanCrossesWeekend() = testApplication {
+    fun boardIncludesWoInNextWeekWhenSpanCrossesWeekend() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -709,9 +716,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardScopeFilterEmptyScopeReturnsEmptyItems() = testApplication {
+    fun boardScopeFilterEmptyScopeReturnsEmptyItems() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -750,9 +757,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardScopeFilterKeepsOnlyInScopeWorkOrders() = testApplication {
+    fun boardScopeFilterKeepsOnlyInScopeWorkOrders() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -815,9 +822,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardScopeFilterShowsWorkOrderWhenLiveSiteInScopeDespiteStaleWoSiteId() = testApplication {
+    fun boardScopeFilterShowsWorkOrderWhenLiveSiteInScopeDespiteStaleWoSiteId() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -866,9 +873,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardScopeFilterHidesWorkOrderWhenLiveSiteOutOfScopeDespiteMatchingWoSiteId() = testApplication {
+    fun boardScopeFilterHidesWorkOrderWhenLiveSiteOutOfScopeDespiteMatchingWoSiteId() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -916,9 +923,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardWithoutScopeFilterReturnsFullBoard() = testApplication {
+    fun boardWithoutScopeFilterReturnsFullBoard() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -962,9 +969,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchAssigneeOutOfScopeRejected() = testApplication {
+    fun patchAssigneeOutOfScopeRejected() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -1009,9 +1016,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchAssigneeInScopeSucceeds() = testApplication {
+    fun patchAssigneeInScopeSucceeds() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -1058,9 +1065,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchClearAssigneeSucceedsWithoutScopeCheck() = testApplication {
+    fun patchClearAssigneeSucceedsWithoutScopeCheck() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scope =
             FakeCatalogScopeClient(
                 scopes =
@@ -1110,9 +1117,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchAssigneeBoardOnlyRejectedEvenWhenInScope() = testApplication {
+    fun patchAssigneeBoardOnlyRejectedEvenWhenInScope() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val features = FakeFeatureLookupClient(engineerUserIds = emptySet())
         val scope =
             FakeCatalogScopeClient(
@@ -1160,9 +1167,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchAssigneeEngineerUserInScopeAccepted() = testApplication {
+    fun patchAssigneeEngineerUserInScopeAccepted() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val features = FakeFeatureLookupClient(engineerUserIds = setOf("engineer-1"))
         val scope =
             FakeCatalogScopeClient(
@@ -1212,9 +1219,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun patchClearAssigneeSucceedsWithoutFeatureLookup() = testApplication {
+    fun patchClearAssigneeSucceedsWithoutFeatureLookup() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val features = FakeFeatureLookupClient(engineerUserIds = setOf("engineer-1"))
         val scope =
             FakeCatalogScopeClient(
@@ -1268,9 +1275,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun listWorkOrdersFilteredByAssigneeId() = testApplication {
+    fun listWorkOrdersFilteredByAssigneeId() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1308,9 +1315,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun boardFilteredByAssigneeId() = testApplication {
+    fun boardFilteredByAssigneeId() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1352,9 +1359,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsCallerCreatesWithCreatedByAndDescription() = testApplication {
+    fun ticketsCallerCreatesWithCreatedByAndDescription() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1375,9 +1382,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyCreateRejectsOutOfScopeAsset() = testApplication {
+    fun ticketsOnlyCreateRejectsOutOfScopeAsset() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scopeClient =
             FakeCatalogScopeClient(
                 scopes = mapOf("org-1::customer-1" to UserScopeView("customer-1", "org-1", assetIds = listOf("a2"))),
@@ -1409,9 +1416,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyCreateRejectsBlankOrMissingDescription() = testApplication {
+    fun ticketsOnlyCreateRejectsBlankOrMissingDescription() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1435,9 +1442,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyCreateAcceptsInScopeAssetWithDescription() = testApplication {
+    fun ticketsOnlyCreateAcceptsInScopeAssetWithDescription() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         val scopeClient =
             FakeCatalogScopeClient(
                 scopes = mapOf("org-1::customer-1" to UserScopeView("customer-1", "org-1", assetIds = listOf("a1"))),
@@ -1469,9 +1476,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyListForcesCreatedBySelf() = testApplication {
+    fun ticketsOnlyListForcesCreatedBySelf() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1501,9 +1508,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyGetForeignWorkOrderReturns404() = testApplication {
+    fun ticketsOnlyGetForeignWorkOrderReturns404() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1526,9 +1533,9 @@ class WorkOrderRoutesTest {
     }
 
     @Test
-    fun ticketsOnlyPatchReturns400() = testApplication {
+    fun ticketsOnlyPatchReturns400() = withApplication {
         val maps = FakeMaintenanceMapGateway()
-        val orders = WorkOrderStore()
+        val orders = WorkOrderStore(dataSource)
         application {
             module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
         }
@@ -1551,4 +1558,27 @@ class WorkOrderRoutesTest {
             }
         assertEquals(HttpStatusCode.BadRequest, res.status)
     }
+    private fun withApplication(block: suspend ApplicationTestBuilder.() -> Unit) {
+        Db.connect(postgres.jdbcUrl, postgres.username, postgres.password).use { connected ->
+            dataSource = connected
+            connected.connection.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("TRUNCATE work_orders")
+                }
+            }
+            testApplication {
+                block()
+            }
+        }
+    }
+
+    companion object {
+        @Container
+        @JvmStatic
+        val postgres = PostgreSQLContainer("postgres:16-alpine")
+            .withDatabaseName("dashboard")
+            .withUsername("dashboard")
+            .withPassword("dashboard")
+    }
+
 }

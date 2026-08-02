@@ -441,6 +441,7 @@ class WorkOrderStore(
                  assignee_id, maintenance_map_id, maintenance_map_item_id, created_by, description,
                  source, created_at, updated_at, started_at, closed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
                 """.trimIndent(),
             ).use { statement ->
                 statement.setString(1, workOrder.id)
@@ -462,7 +463,26 @@ class WorkOrderStore(
                 statement.setString(17, workOrder.updatedAt)
                 statement.setNullableString(18, workOrder.startedAt)
                 statement.setNullableString(19, workOrder.closedAt)
-                statement.executeUpdate()
+                if (
+                    statement.executeUpdate() == 0 &&
+                    workOrder.type == WorkOrderType.ppr &&
+                    workOrder.maintenanceMapItemId != null
+                ) {
+                    connection.prepareStatement(
+                        """
+                        SELECT * FROM work_orders
+                        WHERE org_id = ? AND type = 'ppr'
+                          AND maintenance_map_item_id = ? AND due_at = ?
+                        """.trimIndent(),
+                    ).use { existing ->
+                        existing.setString(1, workOrder.orgId)
+                        existing.setString(2, workOrder.maintenanceMapItemId)
+                        existing.setString(3, workOrder.dueAt)
+                        existing.executeQuery().use { result ->
+                            if (result.next()) return result.toWorkOrder()
+                        }
+                    }
+                }
             }
         }
         return workOrder
