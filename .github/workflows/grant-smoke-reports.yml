@@ -30,19 +30,30 @@ jobs:
           ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
             ORG_ID="$ORG_ID" ROLE_ID="$ROLE_ID" bash -s <<'REMOTE'
           set -euo pipefail
-          curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8082/roles >/tmp/roles.json
+          for PORT in 8082 8093 8080 80; do
+            CODE=$(curl -sS -o /tmp/roles.json -w '%{http_code}' -H "X-Org-Id: ${ORG_ID}" "http://127.0.0.1:${PORT}/roles" || true)
+            echo "GET :${PORT}/roles -> $CODE"
+            head -c 200 /tmp/roles.json; echo
+            if [[ "$CODE" == "200" ]]; then
+              export FEATURE_PORT="$PORT"
+              break
+            fi
+          done
+          [[ -n "${FEATURE_PORT:-}" ]] || { echo "feature /roles not found"; exit 1; }
           python3 - <<'PY'
           import json, os, urllib.request
           org = os.environ["ORG_ID"]
           role_id = os.environ["ROLE_ID"]
+          port = os.environ["FEATURE_PORT"]
           roles = json.load(open("/tmp/roles.json")).get("items") or []
+          print("roles", [r.get("id") for r in roles])
           role = next((r for r in roles if r.get("id") == role_id), None)
           if not role:
-              raise SystemExit(f"role {role_id} not found: {[r.get('id') for r in roles]}")
+              raise SystemExit(f"role {role_id} not found")
           features = list(dict.fromkeys((role.get("features") or []) + ["reports"]))
           body = json.dumps({"titleRu": role.get("titleRu"), "features": features}).encode()
           req = urllib.request.Request(
-              f"http://127.0.0.1:8082/roles/{role_id}",
+              f"http://127.0.0.1:{port}/roles/{role_id}",
               data=body,
               headers={"Content-Type": "application/json", "X-Org-Id": org},
               method="PUT",
