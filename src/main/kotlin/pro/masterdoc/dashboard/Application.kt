@@ -136,6 +136,18 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/manager-kpis") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.managerKpis(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                    now = Instant.now(clock),
+                ),
+            )
+        }
 
         post("/work-orders") {
             val orgId = call.orgId()

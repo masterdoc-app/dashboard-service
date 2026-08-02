@@ -249,6 +249,13 @@ class WorkOrderStore {
             .toList()
     }
 
+    fun managerKpis(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+        now: Instant = Instant.now(),
+    ): ManagerKpis = computeManagerKpis(list(orgId), from, to, now)
+
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }
         val start = WeekDates.parseDate(weekStart) ?: throw IllegalArgumentException("weekStart must be YYYY-MM-DD")
