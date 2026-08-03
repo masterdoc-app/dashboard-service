@@ -38,7 +38,7 @@ class ManagerReportsSeedTest {
                 store.managerKpis(
                     orgId = "smoke",
                     from = Instant.parse("2026-05-01T00:00:00Z"),
-                    to = Instant.parse("2026-08-02T23:59:59.999999999Z"),
+                    to = Instant.parse("2026-08-16T23:59:59.999999999Z"),
                     now = now,
                 )
             assertTrue(kpis.mttrSampleSize >= 50)
