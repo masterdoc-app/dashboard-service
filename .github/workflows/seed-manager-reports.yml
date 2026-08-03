@@ -11,6 +11,7 @@ on:
 jobs:
   seed:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Seed manager report work orders for org
         env:
@@ -22,9 +23,12 @@ jobs:
           set -euo pipefail
           install -m 600 /dev/null /tmp/deploy_key
           printf '%s\n' "$KEY" > /tmp/deploy_key
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            "${USER}@${HOST}" \
             ORG_ID="$ORG_ID" bash -s <<'EOF'
           set -euo pipefail
+          echo "seed start org=${ORG_ID}"
 
           curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/sites >/tmp/sites.json
           SITE_ID="$(python3 -c 'import json; items=json.load(open("/tmp/sites.json")).get("items") or []; print(items[0]["id"] if items else "")')"
@@ -42,14 +46,14 @@ jobs:
           fi
           echo "ASSET_COUNT=$ASSET_COUNT"
 
-          # Prefer a real catalog scope user as seed creator; fall back to X-User-Id style ops id.
-          CREATOR_ID="$(
-            (cd /opt/catalog-service/deploy && docker compose exec -T catalog-postgres \
-              psql -U catalog -d catalog -tAc \
-              "SELECT user_id FROM user_scopes WHERE org_id = '${ORG_ID}' ORDER BY user_id LIMIT 1") \
-            || true
-          )"
-          CREATOR_ID="$(echo -n "$CREATOR_ID" | tr -d '[:space:]')"
+          # Prefer a real catalog scope user as seed creator; fall back to ops id.
+          # Timeout: docker exec can hang if catalog stack is down.
+          CREATOR_ID=""
+          if CREATOR_ID="$(timeout 20 bash -lc "cd /opt/catalog-service/deploy && docker compose exec -T catalog-postgres psql -U catalog -d catalog -tAc \"SELECT user_id FROM user_scopes WHERE org_id = '${ORG_ID}' ORDER BY user_id LIMIT 1\"" 2>/dev/null)"; then
+            CREATOR_ID="$(echo -n "$CREATOR_ID" | tr -d '[:space:]')"
+          else
+            CREATOR_ID=""
+          fi
           if [[ -z "$CREATOR_ID" ]]; then
             CREATOR_ID="seed-${ORG_ID}"
             echo "WARN: no user_scopes for org; using CREATOR_ID=$CREATOR_ID"
@@ -57,41 +61,46 @@ jobs:
             echo "CREATOR_ID=$CREATOR_ID"
           fi
 
-          BODY="$(SITE_ID="$SITE_ID" CREATOR_ID="$CREATOR_ID" python3 - <<'PY'
+          BODY="$(SITE_ID="$SITE_ID" CREATOR_ID="$CREATOR_ID" python3 -c "
           import json, os
-          site_id = os.environ["SITE_ID"]
-          creator = os.environ["CREATOR_ID"]
-          items = json.load(open("/tmp/assets.json")).get("items") or []
-          print(json.dumps({"siteId": site_id, "assetIds": [a["id"] for a in items], "createdBy": creator}))
-          PY
-          )"
+          items = json.load(open('/tmp/assets.json')).get('items') or []
+          print(json.dumps({
+              'siteId': os.environ['SITE_ID'],
+              'assetIds': [a['id'] for a in items],
+              'createdBy': os.environ['CREATOR_ID'],
+          }))
+          ")"
+          echo "BODY_BYTES=${#BODY}"
 
-          CODE="$(curl -sS -o /tmp/seed.json -w '%{http_code}' \
-            -X POST -H "Content-Type: application/json" \
+          echo "POST seed-manager-reports ..."
+          CODE="$(curl -sS --max-time 300 -o /tmp/seed.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
             -d "$BODY" \
             "http://127.0.0.1:8092/internal/orgs/${ORG_ID}/seed-manager-reports")"
           echo "POST seed-manager-reports -> $CODE"
           cat /tmp/seed.json
+          echo
           [[ "$CODE" == "200" ]] || exit 1
 
-          python3 - <<'PY'
+          python3 -c "
           import json
-          r = json.load(open("/tmp/seed.json"))
-          print(f"deleted={r.get('deleted')} created={r.get('created')} orgId={r.get('orgId')}")
-          PY
+          r = json.load(open('/tmp/seed.json'))
+          print(f\"deleted={r.get('deleted')} created={r.get('created')} orgId={r.get('orgId')}\")
+          "
 
           FROM="$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=90)).isoformat())')"
           TO="$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=14)).isoformat())')"
-          curl -sS -H "X-Org-Id: ${ORG_ID}" \
+          curl -sS --max-time 60 -H "X-Org-Id: ${ORG_ID}" \
             "http://127.0.0.1:8092/reports/manager-kpis?from=${FROM}&to=${TO}" >/tmp/kpis.json
 
-          python3 - <<'PY'
+          python3 -c "
           import json
-          k = json.load(open("/tmp/kpis.json"))
+          k = json.load(open('/tmp/kpis.json'))
           print(
-              f"KPIs {k.get('from')}..{k.get('to')}: "
-              f"emergency={k.get('emergencyCount')} planned={k.get('plannedCount')} "
-              f"mttr={k.get('mttrHours')} availability={k.get('availabilityPercent')}%"
+              f\"KPIs {k.get('from')}..{k.get('to')}: \"
+              f\"emergency={k.get('emergencyCount')} planned={k.get('plannedCount')} \"
+              f\"mttr={k.get('mttrHours')} availability={k.get('availabilityPercent')}%\"
           )
-          PY
+          "
+          echo "seed done"
           EOF
