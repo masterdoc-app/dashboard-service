@@ -26,11 +26,13 @@ class ManagerReportsSeedTest {
                     siteId = "ceh-1",
                     assetIds = listOf("asset-a", "asset-b"),
                     now = now,
+                    createdBy = "seed-user-1",
                 )
 
             assertTrue(result.created >= 8)
             assertEquals("smoke", result.orgId)
             assertEquals(result.created, store.list("smoke").size)
+            assertTrue(store.list("smoke").all { it.createdBy == "seed-user-1" })
 
             val kpis =
                 store.managerKpis(

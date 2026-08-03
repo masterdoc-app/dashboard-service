@@ -9,6 +9,7 @@ import java.time.temporal.ChronoUnit
 data class SeedManagerReportsRequest(
     val siteId: String,
     val assetIds: List<String>,
+    val createdBy: String? = null,
 )
 
 @Serializable
@@ -24,11 +25,13 @@ fun seedManagerReports(
     siteId: String,
     assetIds: List<String>,
     now: Instant,
+    createdBy: String? = null,
 ): SeedManagerReportsResponse {
     require(orgId.isNotBlank()) { "orgId required" }
     require(siteId.isNotBlank()) { "siteId required" }
     require(assetIds.isNotEmpty()) { "assetIds must not be empty" }
     require(assetIds.all { it.isNotBlank() }) { "assetIds must not contain blank values" }
+    val creator = createdBy?.trim()?.takeIf { it.isNotBlank() }
 
     val deleted = store.clearOrg(orgId)
     val maps = SeedMaintenanceMaps(assetIds)
@@ -57,7 +60,7 @@ fun seedManagerReports(
                 maintenanceMapItemId = if (type == WorkOrderType.ppr) maps.itemId(assetId) else null,
                 source = WorkOrderSource.api,
             )
-        val workOrder = store.create(orgId, request, now = createdAt, maps = maps)
+        val workOrder = store.create(orgId, request, createdBy = creator, now = createdAt, maps = maps)
         created++
         when (status) {
             WorkOrderStatus.closed -> {

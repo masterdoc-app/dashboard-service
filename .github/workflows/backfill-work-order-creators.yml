@@ -1,0 +1,180 @@
+# Ops: set created_by on work orders that lack a creator, across all orgs.
+name: Backfill Work Order Creators
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "If true, only print plan (no UPDATE)"
+        required: false
+        default: "false"
+      fallback_creator_id:
+        description: "Optional user id when org has no assignee, peer creator, or catalog scope user"
+        required: false
+        default: ""
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Backfill created_by on VPS
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FALLBACK_CREATOR_ID: ${{ inputs.fallback_creator_id }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
+            DRY_RUN="$DRY_RUN" FALLBACK_CREATOR_ID="$FALLBACK_CREATOR_ID" bash -s <<'REMOTE'
+          set -euo pipefail
+
+          DASH_COMPOSE=/opt/dashboard-service/deploy
+          CAT_COMPOSE=/opt/catalog-service/deploy
+
+          dash_psql() {
+            (cd "$DASH_COMPOSE" && docker compose exec -T dashboard-postgres \
+              psql -U dashboard -d dashboard -v ON_ERROR_STOP=1 "$@")
+          }
+          cat_psql() {
+            (cd "$CAT_COMPOSE" && docker compose exec -T catalog-postgres \
+              psql -U catalog -d catalog -v ON_ERROR_STOP=1 "$@")
+          }
+
+          echo '=== before: missing creators by org ==='
+          dash_psql -c "
+          SELECT org_id,
+                 COUNT(*) AS total,
+                 COUNT(*) FILTER (WHERE created_by IS NULL OR btrim(created_by) = '') AS missing
+          FROM work_orders
+          GROUP BY org_id
+          ORDER BY missing DESC, org_id;
+          "
+
+          dash_psql -c "
+          COPY (
+            SELECT id, org_id,
+                   COALESCE(NULLIF(btrim(assignee_id), ''), '') AS assignee_id,
+                   COALESCE(NULLIF(btrim(created_by), ''), '') AS created_by
+            FROM work_orders
+          ) TO STDOUT WITH CSV HEADER
+          " >/tmp/work_orders.csv
+
+          cat_psql -c "
+          COPY (
+            SELECT org_id, user_id FROM user_scopes ORDER BY org_id, user_id
+          ) TO STDOUT WITH CSV HEADER
+          " >/tmp/user_scopes.csv
+
+          python3 - <<'PY'
+          import csv, os
+          from collections import Counter, defaultdict
+          from datetime import datetime, timezone
+
+          dry = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+          fallback = (os.environ.get("FALLBACK_CREATOR_ID") or "").strip()
+
+          scopes = defaultdict(list)
+          with open("/tmp/user_scopes.csv", newline="") as f:
+              for row in csv.DictReader(f):
+                  org, uid = row["org_id"], row["user_id"]
+                  if org and uid and uid not in scopes[org]:
+                      scopes[org].append(uid)
+
+          peer_counts = defaultdict(Counter)
+          rows = []
+          with open("/tmp/work_orders.csv", newline="") as f:
+              for row in csv.DictReader(f):
+                  rows.append(row)
+                  cb = (row.get("created_by") or "").strip()
+                  if cb:
+                      peer_counts[row["org_id"]][cb] += 1
+
+          peer = {
+              org: counts.most_common(1)[0][0]
+              for org, counts in peer_counts.items()
+              if counts
+          }
+
+          updates = []  # (id, creator, reason)
+          unresolved = []
+          for row in rows:
+              if (row.get("created_by") or "").strip():
+                  continue
+              org = row["org_id"]
+              assignee = (row.get("assignee_id") or "").strip()
+              if assignee:
+                  updates.append((row["id"], assignee, "assignee"))
+              elif peer.get(org):
+                  updates.append((row["id"], peer[org], "peer_created_by"))
+              elif scopes.get(org):
+                  updates.append((row["id"], scopes[org][0], "user_scope"))
+              elif fallback:
+                  updates.append((row["id"], fallback, "fallback"))
+              else:
+                  unresolved.append(row)
+
+          by_reason = defaultdict(int)
+          by_org = defaultdict(int)
+          id_to_org = {r["id"]: r["org_id"] for r in rows}
+          for wid, _, reason in updates:
+              by_reason[reason] += 1
+              by_org[id_to_org[wid]] += 1
+
+          print(f"planned_updates={len(updates)} unresolved={len(unresolved)} dry_run={dry}")
+          print("by_reason", dict(by_reason))
+          print("by_org", dict(by_org))
+          if unresolved:
+              print("UNRESOLVED (first 20):")
+              for r in unresolved[:20]:
+                  print(f"  org={r['org_id']} id={r['id']}")
+
+          if dry:
+              raise SystemExit(0 if not unresolved else 1)
+
+          if not updates:
+              raise SystemExit(0 if not unresolved else 1)
+
+          now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+          sql_lines = ["BEGIN;"]
+          for wid, creator, _ in updates:
+              esc_id = wid.replace("'", "''")
+              esc_c = creator.replace("'", "''")
+              sql_lines.append(
+                  f"UPDATE work_orders SET created_by = '{esc_c}', updated_at = '{now}' "
+                  f"WHERE id = '{esc_id}' AND (created_by IS NULL OR btrim(created_by) = '');"
+              )
+          sql_lines.append("COMMIT;")
+          open("/tmp/backfill_creators.sql", "w").write("\n".join(sql_lines) + "\n")
+          print(f"wrote {len(updates)} UPDATE statements")
+          PY
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "dry_run complete"
+            exit 0
+          fi
+
+          if [[ -f /tmp/backfill_creators.sql ]]; then
+            echo '=== applying updates ==='
+            dash_psql -f /tmp/backfill_creators.sql
+          else
+            echo "no SQL file (nothing to update)"
+          fi
+
+          echo '=== after: missing creators by org ==='
+          dash_psql -c "
+          SELECT org_id,
+                 COUNT(*) AS total,
+                 COUNT(*) FILTER (WHERE created_by IS NULL OR btrim(created_by) = '') AS missing
+          FROM work_orders
+          GROUP BY org_id
+          ORDER BY missing DESC, org_id;
+          "
+
+          LEFT="$(dash_psql -tAc "SELECT COUNT(*) FROM work_orders WHERE created_by IS NULL OR btrim(created_by) = '';")"
+          echo "remaining_missing=$LEFT"
+          [[ "$LEFT" == "0" ]] || { echo "FAIL: still missing creators"; exit 1; }
+          REMOTE

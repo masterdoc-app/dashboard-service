@@ -42,11 +42,27 @@ jobs:
           fi
           echo "ASSET_COUNT=$ASSET_COUNT"
 
-          BODY="$(SITE_ID="$SITE_ID" python3 - <<'PY'
+          # Prefer a real catalog scope user as seed creator; fall back to X-User-Id style ops id.
+          CREATOR_ID="$(
+            (cd /opt/catalog-service/deploy && docker compose exec -T catalog-postgres \
+              psql -U catalog -d catalog -tAc \
+              "SELECT user_id FROM user_scopes WHERE org_id = '${ORG_ID}' ORDER BY user_id LIMIT 1") \
+            || true
+          )"
+          CREATOR_ID="$(echo -n "$CREATOR_ID" | tr -d '[:space:]')"
+          if [[ -z "$CREATOR_ID" ]]; then
+            CREATOR_ID="seed-${ORG_ID}"
+            echo "WARN: no user_scopes for org; using CREATOR_ID=$CREATOR_ID"
+          else
+            echo "CREATOR_ID=$CREATOR_ID"
+          fi
+
+          BODY="$(SITE_ID="$SITE_ID" CREATOR_ID="$CREATOR_ID" python3 - <<'PY'
           import json, os
           site_id = os.environ["SITE_ID"]
+          creator = os.environ["CREATOR_ID"]
           items = json.load(open("/tmp/assets.json")).get("items") or []
-          print(json.dumps({"siteId": site_id, "assetIds": [a["id"] for a in items]}))
+          print(json.dumps({"siteId": site_id, "assetIds": [a["id"] for a in items], "createdBy": creator}))
           PY
           )"
 

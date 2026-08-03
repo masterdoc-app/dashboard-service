@@ -321,6 +321,7 @@ fun Application.module(
                     siteId = body.siteId,
                     assetIds = body.assetIds,
                     now = Instant.now(clock),
+                    createdBy = body.createdBy,
                 ),
             )
         }
