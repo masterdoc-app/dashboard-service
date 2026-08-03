@@ -23,84 +23,72 @@ jobs:
           set -euo pipefail
           install -m 600 /dev/null /tmp/deploy_key
           printf '%s\n' "$KEY" > /tmp/deploy_key
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
-            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
-            "${USER}@${HOST}" \
-            ORG_ID="$ORG_ID" bash -s <<'EOF'
+
+          # Write remote script locally, then pipe via ssh.
+          # Nested heredocs inside `ssh bash -s` steal stdin and abort early.
+          cat > /tmp/seed_manager_reports_remote.sh <<'REMOTE'
           set -euo pipefail
           echo "seed start org=${ORG_ID}"
 
           curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/sites >/tmp/sites.json
-          SITE_ID="$(python3 -c 'import json; items=json.load(open("/tmp/sites.json")).get("items") or []; print(items[0]["id"] if items else "")')"
-          if [[ -z "$SITE_ID" ]]; then
-            echo "No sites found for org ${ORG_ID}"
-            exit 1
-          fi
+          SITE_ID=$(python3 -c 'import json; items=json.load(open("/tmp/sites.json")).get("items") or []; print(items[0]["id"] if items else "")')
+          test -n "$SITE_ID" || { echo "No sites for org ${ORG_ID}"; exit 1; }
           echo "SITE_ID=$SITE_ID"
 
           curl -sS -H "X-Org-Id: ${ORG_ID}" http://127.0.0.1:8091/assets >/tmp/assets.json
-          ASSET_COUNT="$(python3 -c 'import json; print(len(json.load(open("/tmp/assets.json")).get("items") or []))')"
-          if [[ "$ASSET_COUNT" -eq 0 ]]; then
-            echo "No assets found for org ${ORG_ID}. Run catalog-service workflow 'Seed Demo Assets' first."
-            exit 1
-          fi
+          ASSET_COUNT=$(python3 -c 'import json; print(len(json.load(open("/tmp/assets.json")).get("items") or []))')
+          test "$ASSET_COUNT" -gt 0 || { echo "No assets for org ${ORG_ID}"; exit 1; }
           echo "ASSET_COUNT=$ASSET_COUNT"
 
-          # Prefer a real catalog scope user as seed creator; fall back to ops id.
-          # Timeout: docker exec can hang if catalog stack is down.
-          CREATOR_ID=""
-          if CREATOR_ID="$(timeout 20 bash -lc "cd /opt/catalog-service/deploy && docker compose exec -T catalog-postgres psql -U catalog -d catalog -tAc \"SELECT user_id FROM user_scopes WHERE org_id = '${ORG_ID}' ORDER BY user_id LIMIT 1\"" 2>/dev/null)"; then
-            CREATOR_ID="$(echo -n "$CREATOR_ID" | tr -d '[:space:]')"
-          else
-            CREATOR_ID=""
-          fi
-          if [[ -z "$CREATOR_ID" ]]; then
-            CREATOR_ID="seed-${ORG_ID}"
-            echo "WARN: no user_scopes for org; using CREATOR_ID=$CREATOR_ID"
-          else
-            echo "CREATOR_ID=$CREATOR_ID"
-          fi
+          CREATOR_ID="seed-${ORG_ID}"
+          echo "CREATOR_ID=$CREATOR_ID"
+          export ORG_ID SITE_ID CREATOR_ID
 
-          BODY="$(SITE_ID="$SITE_ID" CREATOR_ID="$CREATOR_ID" python3 -c "
-          import json, os
-          items = json.load(open('/tmp/assets.json')).get('items') or []
-          print(json.dumps({
-              'siteId': os.environ['SITE_ID'],
-              'assetIds': [a['id'] for a in items],
-              'createdBy': os.environ['CREATOR_ID'],
-          }))
-          ")"
-          echo "BODY_BYTES=${#BODY}"
+          python3 -c '
+          import json, os, urllib.request
+          org = os.environ["ORG_ID"]
+          site = os.environ["SITE_ID"]
+          creator = os.environ["CREATOR_ID"]
+          items = json.load(open("/tmp/assets.json")).get("items") or []
+          body = json.dumps({
+              "siteId": site,
+              "assetIds": [a["id"] for a in items],
+              "createdBy": creator,
+          }).encode()
+          print("BODY_BYTES", len(body), flush=True)
+          req = urllib.request.Request(
+              "http://127.0.0.1:8092/internal/orgs/%s/seed-manager-reports" % org,
+              data=body,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=300) as resp:
+              raw = resp.read().decode()
+              print("POST", resp.status, raw, flush=True)
+              open("/tmp/seed.json", "w").write(raw)
+          r = json.load(open("/tmp/seed.json"))
+          print("deleted=%s created=%s orgId=%s" % (r.get("deleted"), r.get("created"), r.get("orgId")), flush=True)
+          '
 
-          echo "POST seed-manager-reports ..."
-          CODE="$(curl -sS --max-time 300 -o /tmp/seed.json -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' \
-            -d "$BODY" \
-            "http://127.0.0.1:8092/internal/orgs/${ORG_ID}/seed-manager-reports")"
-          echo "POST seed-manager-reports -> $CODE"
-          cat /tmp/seed.json
-          echo
-          [[ "$CODE" == "200" ]] || exit 1
-
-          python3 -c "
-          import json
-          r = json.load(open('/tmp/seed.json'))
-          print(f\"deleted={r.get('deleted')} created={r.get('created')} orgId={r.get('orgId')}\")
-          "
-
-          FROM="$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=90)).isoformat())')"
-          TO="$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=14)).isoformat())')"
+          FROM=$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=90)).isoformat())')
+          TO=$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=14)).isoformat())')
           curl -sS --max-time 60 -H "X-Org-Id: ${ORG_ID}" \
             "http://127.0.0.1:8092/reports/manager-kpis?from=${FROM}&to=${TO}" >/tmp/kpis.json
-
-          python3 -c "
+          python3 -c '
           import json
-          k = json.load(open('/tmp/kpis.json'))
+          k = json.load(open("/tmp/kpis.json"))
           print(
-              f\"KPIs {k.get('from')}..{k.get('to')}: \"
-              f\"emergency={k.get('emergencyCount')} planned={k.get('plannedCount')} \"
-              f\"mttr={k.get('mttrHours')} availability={k.get('availabilityPercent')}%\"
+              "KPIs %s..%s: emergency=%s planned=%s mttr=%s availability=%s%%"
+              % (k.get("from"), k.get("to"), k.get("emergencyCount"), k.get("plannedCount"), k.get("mttrHours"), k.get("availabilityPercent")),
+              flush=True,
           )
-          "
+          '
           echo "seed done"
-          EOF
+          REMOTE
+
+          scp -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            /tmp/seed_manager_reports_remote.sh "${USER}@${HOST}:/tmp/seed_manager_reports_remote.sh"
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            "${USER}@${HOST}" \
+            "ORG_ID=$(printf %q "$ORG_ID") bash /tmp/seed_manager_reports_remote.sh"
