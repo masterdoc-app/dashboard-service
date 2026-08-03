@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       org_id:
-        description: Org to seed
+        description: Org to seed (Fixaverse Demo by default)
         required: true
-        default: "383177088934346755"
+        default: "382715225649971203"
 
 jobs:
   seed:
@@ -80,8 +80,8 @@ jobs:
           print(f"deleted={r.get('deleted')} created={r.get('created')} orgId={r.get('orgId')}")
           PY
 
-          FROM="$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=60)).isoformat())')"
-          TO="$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=7)).isoformat())')"
+          FROM="$(python3 -c 'from datetime import date, timedelta; print((date.today()-timedelta(days=90)).isoformat())')"
+          TO="$(python3 -c 'from datetime import date, timedelta; print((date.today()+timedelta(days=14)).isoformat())')"
           curl -sS -H "X-Org-Id: ${ORG_ID}" \
             "http://127.0.0.1:8092/reports/manager-kpis?from=${FROM}&to=${TO}" >/tmp/kpis.json
 

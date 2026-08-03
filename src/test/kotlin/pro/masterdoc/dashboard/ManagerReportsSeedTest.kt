@@ -29,7 +29,7 @@ class ManagerReportsSeedTest {
                     createdBy = "seed-user-1",
                 )
 
-            assertTrue(result.created >= 8)
+            assertTrue(result.created >= 200, "expected dense demo seed, got ${result.created}")
             assertEquals("smoke", result.orgId)
             assertEquals(result.created, store.list("smoke").size)
             assertTrue(store.list("smoke").all { it.createdBy == "seed-user-1" })
@@ -37,15 +37,21 @@ class ManagerReportsSeedTest {
             val kpis =
                 store.managerKpis(
                     orgId = "smoke",
-                    from = Instant.parse("2026-07-03T00:00:00Z"),
+                    from = Instant.parse("2026-05-01T00:00:00Z"),
                     to = Instant.parse("2026-08-02T23:59:59.999999999Z"),
                     now = now,
                 )
-            assertTrue(kpis.mttrSampleSize > 0)
-            assertTrue(kpis.emergencyCount > 0)
-            assertTrue(kpis.plannedCount > 0)
-            assertTrue(kpis.pprOnTime + kpis.pprLate + kpis.pprOpenOverdue + kpis.pprOpenPending > 0)
-            assertTrue(kpis.backlogUnder7d + kpis.backlog7to30d + kpis.backlogOver30d > 0)
+            assertTrue(kpis.mttrSampleSize >= 50)
+            assertTrue(kpis.mtbfSampleSize >= 1)
+            assertTrue(kpis.emergencyCount >= 50)
+            assertTrue(kpis.plannedCount >= 50)
+            assertTrue(kpis.pprOnTime >= 10)
+            assertTrue(kpis.pprLate >= 10)
+            assertTrue(kpis.pprOpenOverdue >= 5)
+            assertTrue(kpis.pprOpenPending >= 5)
+            assertTrue(kpis.backlogUnder7d >= 5)
+            assertTrue(kpis.backlog7to30d >= 5)
+            assertTrue(kpis.backlogOver30d >= 5)
             assertTrue(kpis.downtimeRanking.isNotEmpty())
         }
 

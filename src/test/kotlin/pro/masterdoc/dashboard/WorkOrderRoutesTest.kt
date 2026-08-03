@@ -360,7 +360,7 @@ class WorkOrderRoutesTest {
                 setBody("""{"siteId":"ceh-1","assetIds":["asset-a","asset-b"]}""")
             }
         assertEquals(HttpStatusCode.OK, seed.status)
-        assertTrue(json.parseToJsonElement(seed.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int >= 8)
+        assertTrue(json.parseToJsonElement(seed.bodyAsText()).jsonObject["created"]!!.jsonPrimitive.int >= 200)
 
         val kpis =
             client.get("/reports/manager-kpis?from=2026-07-01&to=2026-07-31") {

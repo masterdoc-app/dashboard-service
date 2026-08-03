@@ -19,6 +19,57 @@ data class SeedManagerReportsResponse(
     val orgId: String,
 )
 
+private val EmergencyTitles =
+    listOf(
+        "Авария компрессора",
+        "Авария насоса",
+        "Перегрев двигателя",
+        "Авария подшипника",
+        "Утечка масла",
+        "Сбой датчика давления",
+        "Обрыв ремня",
+        "Засор фильтра",
+        "Короткое замыкание",
+        "Вибрация выше нормы",
+        "Падение давления",
+        "Отказ пускателя",
+        "Перегрузка линии",
+        "Неисправность клапана",
+        "Сбой частотного преобразователя",
+    )
+
+private val PprTitles =
+    listOf(
+        "ППР компрессора",
+        "ППР насоса",
+        "ППР вентилятора",
+        "ППР линии подачи",
+        "ППР редуктора",
+        "ППР конвейера",
+        "ППР теплообменника",
+        "ППР электрошкафа",
+        "ППР насосной станции",
+        "ППР узла охлаждения",
+    )
+
+private val BacklogTitles =
+    listOf(
+        "Проверка вибрации",
+        "Осмотр электрошкафа",
+        "Диагностика редуктора",
+        "Замена уплотнений",
+        "Калибровка датчиков",
+        "Протяжка соединений",
+        "Чистка радиатора",
+        "Проверка уровня масла",
+        "Замена фильтров",
+        "Ревизия подшипников",
+    )
+
+/**
+ * Dense demo/smoke dataset for manager reports: ~90 days of emergencies, PPR,
+ * backlog and in-progress work across all provided assets.
+ */
 fun seedManagerReports(
     store: WorkOrderStore,
     orgId: String,
@@ -36,6 +87,7 @@ fun seedManagerReports(
     val deleted = store.clearOrg(orgId)
     val maps = SeedMaintenanceMaps(assetIds)
     var created = 0
+    var seq = 0
 
     fun create(
         type: WorkOrderType,
@@ -64,11 +116,15 @@ fun seedManagerReports(
         created++
         when (status) {
             WorkOrderStatus.closed -> {
+                val startedAt =
+                    transitionAt
+                        .minus(durationHours.coerceAtLeast(1).toLong(), ChronoUnit.HOURS)
+                        .coerceAtLeast(createdAt)
                 store.update(
                     orgId,
                     workOrder.id,
                     status = WorkOrderStatus.in_progress,
-                    now = transitionAt.minus(1, ChronoUnit.HOURS),
+                    now = startedAt,
                 )
                 store.update(orgId, workOrder.id, status = WorkOrderStatus.closed, now = transitionAt)
             }
@@ -80,104 +136,150 @@ fun seedManagerReports(
     fun date(offsetDays: Long): String =
         now.atZone(ZoneOffset.UTC).toLocalDate().plusDays(offsetDays).toString()
 
-    // Two failures on the first asset provide MTBF samples; the third adds variety.
-    create(
-        type = WorkOrderType.emergency,
-        title = "Авария компрессора",
-        assetIndex = 0,
-        dueAt = date(-13),
-        createdAt = now.minus(13, ChronoUnit.DAYS),
-        durationHours = 3,
-        status = WorkOrderStatus.closed,
-        transitionAt = now.minus(13, ChronoUnit.DAYS).plus(6, ChronoUnit.HOURS),
-    )
-    create(
-        type = WorkOrderType.emergency,
-        title = "Авария насоса",
-        assetIndex = 0,
-        dueAt = date(-8),
-        createdAt = now.minus(8, ChronoUnit.DAYS),
-        durationHours = 5,
-        status = WorkOrderStatus.closed,
-        transitionAt = now.minus(8, ChronoUnit.DAYS).plus(10, ChronoUnit.HOURS),
-    )
-    create(
-        type = WorkOrderType.emergency,
-        title = "Перегрев двигателя",
-        assetIndex = 1,
-        dueAt = date(-4),
-        createdAt = now.minus(4, ChronoUnit.DAYS),
-        durationHours = 2,
-        status = WorkOrderStatus.closed,
-        transitionAt = now.minus(4, ChronoUnit.DAYS).plus(4, ChronoUnit.HOURS),
-    )
+    fun nextTitle(pool: List<String>): String {
+        val title = pool[seq % pool.size]
+        seq++
+        return title
+    }
 
-    // PPR compliance sample: on-time, late, overdue open, and pending open.
-    create(
-        type = WorkOrderType.ppr,
-        title = "ППР компрессора",
-        assetIndex = 0,
-        dueAt = date(-12),
-        createdAt = now.minus(12, ChronoUnit.DAYS),
-        status = WorkOrderStatus.closed,
-        transitionAt = now.minus(13, ChronoUnit.DAYS),
-    )
-    create(
-        type = WorkOrderType.ppr,
-        title = "ППР насоса",
-        assetIndex = 1,
-        dueAt = date(-10),
-        createdAt = now.minus(10, ChronoUnit.DAYS),
-        status = WorkOrderStatus.closed,
-        transitionAt = now.minus(9, ChronoUnit.DAYS),
-    )
-    create(
-        type = WorkOrderType.ppr,
-        title = "ППР вентилятора",
-        assetIndex = 0,
-        dueAt = date(-2),
-        createdAt = now.minus(2, ChronoUnit.DAYS),
-    )
-    create(
-        type = WorkOrderType.ppr,
-        title = "ППР линии подачи",
-        assetIndex = 1,
-        dueAt = date(3),
-        createdAt = now.minus(1, ChronoUnit.DAYS),
-    )
+    // Closed emergencies across ~90 days — MTTR/MTBF/downtime ranking samples.
+    // Ensure early assets get multiple failures for MTBF.
+    val closedEmergencyCount = 90
+    repeat(closedEmergencyCount) { i ->
+        val dayOffset = -((i * 87) % 90 + 1).toLong() // spread 1..90 days ago
+        val createdAt = now.minus((-dayOffset), ChronoUnit.DAYS).minus((i % 11).toLong(), ChronoUnit.HOURS)
+        val repairHours = 2 + (i % 14)
+        val closeAt = createdAt.plus(repairHours.toLong(), ChronoUnit.HOURS)
+        create(
+            type = WorkOrderType.emergency,
+            title = nextTitle(EmergencyTitles),
+            assetIndex = i % assetIds.size,
+            dueAt = date(dayOffset),
+            createdAt = createdAt,
+            durationHours = repairHours,
+            status = WorkOrderStatus.closed,
+            transitionAt = closeAt,
+        )
+    }
 
-    // Backlog ages: under seven days, seven-to-thirty, and over thirty days.
-    create(
-        type = WorkOrderType.emergency,
-        title = "Проверка вибрации",
-        assetIndex = 1,
-        dueAt = date(-1),
-        createdAt = now.minus(3, ChronoUnit.DAYS),
-    )
-    create(
-        type = WorkOrderType.emergency,
-        title = "Осмотр электрошкафа",
-        assetIndex = 0,
-        dueAt = date(4),
-        createdAt = now.minus(15, ChronoUnit.DAYS),
-    )
-    create(
-        type = WorkOrderType.emergency,
-        title = "Диагностика редуктора",
-        assetIndex = 1,
-        dueAt = date(7),
-        createdAt = now.minus(45, ChronoUnit.DAYS),
-    )
+    // Extra failures on first assets so MTBF has several samples even with 1–2 assets.
+    repeat(assetIds.size.coerceAtMost(8)) { assetIndex ->
+        repeat(2) { k ->
+            val dayOffset = -(12L + assetIndex * 3 + k * 5)
+            val createdAt = now.minus((-dayOffset), ChronoUnit.DAYS)
+            val repairHours = 3 + k * 2
+            create(
+                type = WorkOrderType.emergency,
+                title = nextTitle(EmergencyTitles),
+                assetIndex = assetIndex,
+                dueAt = date(dayOffset),
+                createdAt = createdAt,
+                durationHours = repairHours,
+                status = WorkOrderStatus.closed,
+                transitionAt = createdAt.plus(repairHours.toLong(), ChronoUnit.HOURS),
+            )
+        }
+    }
 
-    create(
-        type = WorkOrderType.emergency,
-        title = "Авария подшипника",
-        assetIndex = 0,
-        dueAt = date(0),
-        createdAt = now.minus(1, ChronoUnit.DAYS),
-        status = WorkOrderStatus.in_progress,
-        transitionAt = now.minus(6, ChronoUnit.HOURS),
-    )
+    // PPR compliance mix over ~90 days: on-time, late, open overdue, open pending.
+    val pprOnTime = 40
+    val pprLate = 25
+    val pprOpenOverdue = 20
+    val pprOpenPending = 25
+    repeat(pprOnTime) { i ->
+        val dayOffset = -((i * 2) % 80 + 5).toLong()
+        val createdAt = now.minus((-dayOffset) + 2, ChronoUnit.DAYS)
+        create(
+            type = WorkOrderType.ppr,
+            title = nextTitle(PprTitles),
+            assetIndex = i,
+            dueAt = date(dayOffset),
+            createdAt = createdAt,
+            durationHours = 4 + (i % 6),
+            status = WorkOrderStatus.closed,
+            transitionAt = now.minus((-dayOffset) + 1, ChronoUnit.DAYS),
+        )
+    }
+    repeat(pprLate) { i ->
+        val dayOffset = -((i * 3) % 70 + 4).toLong()
+        val createdAt = now.minus((-dayOffset) + 3, ChronoUnit.DAYS)
+        create(
+            type = WorkOrderType.ppr,
+            title = nextTitle(PprTitles),
+            assetIndex = i + 1,
+            dueAt = date(dayOffset),
+            createdAt = createdAt,
+            durationHours = 6 + (i % 5),
+            status = WorkOrderStatus.closed,
+            transitionAt = now.minus((-dayOffset) - 1, ChronoUnit.DAYS),
+        )
+    }
+    repeat(pprOpenOverdue) { i ->
+        val dayOffset = -((i % 10) + 1).toLong()
+        create(
+            type = WorkOrderType.ppr,
+            title = nextTitle(PprTitles),
+            assetIndex = i + 2,
+            dueAt = date(dayOffset),
+            createdAt = now.minus((-dayOffset) + 3, ChronoUnit.DAYS),
+            durationHours = 8,
+        )
+    }
+    repeat(pprOpenPending) { i ->
+        val dayOffset = ((i % 14) + 1).toLong()
+        create(
+            type = WorkOrderType.ppr,
+            title = nextTitle(PprTitles),
+            assetIndex = i + 3,
+            dueAt = date(dayOffset),
+            createdAt = now.minus((i % 5 + 1).toLong(), ChronoUnit.DAYS),
+            durationHours = 8,
+        )
+    }
+
+    // Open backlog across age buckets: <7d, 7–30d, >30d (+ overdue due dates).
+    repeat(18) { i ->
+        create(
+            type = WorkOrderType.emergency,
+            title = nextTitle(BacklogTitles),
+            assetIndex = i,
+            dueAt = date((i % 5).toLong()),
+            createdAt = now.minus((i % 6 + 1).toLong(), ChronoUnit.DAYS),
+        )
+    }
+    repeat(16) { i ->
+        create(
+            type = WorkOrderType.emergency,
+            title = nextTitle(BacklogTitles),
+            assetIndex = i + 1,
+            dueAt = date((i % 7 - 2).toLong()),
+            createdAt = now.minus((10 + i % 18).toLong(), ChronoUnit.DAYS),
+        )
+    }
+    repeat(14) { i ->
+        create(
+            type = WorkOrderType.emergency,
+            title = nextTitle(BacklogTitles),
+            assetIndex = i + 2,
+            dueAt = date((i % 10 - 3).toLong()),
+            createdAt = now.minus((35 + i * 2).toLong(), ChronoUnit.DAYS),
+        )
+    }
+
+    // Active in-progress emergencies for Gantt / open downtime.
+    repeat(12) { i ->
+        val startedAgoHours = (6 + i * 5).toLong()
+        create(
+            type = WorkOrderType.emergency,
+            title = nextTitle(EmergencyTitles),
+            assetIndex = i,
+            dueAt = date((i % 3).toLong()),
+            createdAt = now.minus((i % 4 + 1).toLong(), ChronoUnit.DAYS),
+            durationHours = 4 + (i % 5),
+            status = WorkOrderStatus.in_progress,
+            transitionAt = now.minus(startedAgoHours, ChronoUnit.HOURS),
+        )
+    }
 
     return SeedManagerReportsResponse(deleted = deleted, created = created, orgId = orgId)
 }
