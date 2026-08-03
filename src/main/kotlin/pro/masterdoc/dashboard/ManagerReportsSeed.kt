@@ -69,6 +69,8 @@ private val BacklogTitles =
 /**
  * Dense demo/smoke dataset for manager reports: ~90 days of emergencies, PPR,
  * backlog and in-progress work across all provided assets.
+ *
+ * PPR due dates are unique per asset (DB unique on map item + dueAt).
  */
 fun seedManagerReports(
     store: WorkOrderStore,
@@ -87,7 +89,29 @@ fun seedManagerReports(
     val deleted = store.clearOrg(orgId)
     val maps = SeedMaintenanceMaps(assetIds)
     var created = 0
-    var seq = 0
+    var titleSeq = 0
+    // Per-asset past/future due cursors → unique (mapItemId, dueAt).
+    val pastDueCursor = IntArray(assetIds.size) { 5 }
+    val futureDueCursor = IntArray(assetIds.size) { 1 }
+
+    fun nextTitle(pool: List<String>): String {
+        val title = pool[titleSeq % pool.size]
+        titleSeq++
+        return title
+    }
+
+    fun date(offsetDays: Long): String =
+        now.atZone(ZoneOffset.UTC).toLocalDate().plusDays(offsetDays).toString()
+
+    fun nextPastDueOffset(assetIndex: Int): Long {
+        val i = assetIndex % assetIds.size
+        return -(pastDueCursor[i]++).toLong()
+    }
+
+    fun nextFutureDueOffset(assetIndex: Int): Long {
+        val i = assetIndex % assetIds.size
+        return (futureDueCursor[i]++).toLong()
+    }
 
     fun create(
         type: WorkOrderType,
@@ -113,6 +137,10 @@ fun seedManagerReports(
                 source = WorkOrderSource.api,
             )
         val workOrder = store.create(orgId, request, createdBy = creator, now = createdAt, maps = maps)
+        // Deduped PPR insert returns an existing row — do not re-transition it.
+        if (workOrder.status != WorkOrderStatus.new && status != null) {
+            return
+        }
         created++
         when (status) {
             WorkOrderStatus.closed -> {
@@ -133,28 +161,17 @@ fun seedManagerReports(
         }
     }
 
-    fun date(offsetDays: Long): String =
-        now.atZone(ZoneOffset.UTC).toLocalDate().plusDays(offsetDays).toString()
-
-    fun nextTitle(pool: List<String>): String {
-        val title = pool[seq % pool.size]
-        seq++
-        return title
-    }
-
     // Closed emergencies across ~90 days — MTTR/MTBF/downtime ranking samples.
-    // Ensure early assets get multiple failures for MTBF.
-    val closedEmergencyCount = 90
-    repeat(closedEmergencyCount) { i ->
-        val dayOffset = -((i * 87) % 90 + 1).toLong() // spread 1..90 days ago
-        val createdAt = now.minus((-dayOffset), ChronoUnit.DAYS).minus((i % 11).toLong(), ChronoUnit.HOURS)
+    repeat(90) { i ->
+        val daysAgo = ((i * 87) % 90 + 1).toLong()
+        val createdAt = now.minus(daysAgo, ChronoUnit.DAYS).minus((i % 11).toLong(), ChronoUnit.HOURS)
         val repairHours = 2 + (i % 14)
         val closeAt = createdAt.plus(repairHours.toLong(), ChronoUnit.HOURS)
         create(
             type = WorkOrderType.emergency,
             title = nextTitle(EmergencyTitles),
             assetIndex = i % assetIds.size,
-            dueAt = date(dayOffset),
+            dueAt = date(-daysAgo),
             createdAt = createdAt,
             durationHours = repairHours,
             status = WorkOrderStatus.closed,
@@ -165,14 +182,14 @@ fun seedManagerReports(
     // Extra failures on first assets so MTBF has several samples even with 1–2 assets.
     repeat(assetIds.size.coerceAtMost(8)) { assetIndex ->
         repeat(2) { k ->
-            val dayOffset = -(12L + assetIndex * 3 + k * 5)
-            val createdAt = now.minus((-dayOffset), ChronoUnit.DAYS)
+            val daysAgo = 12L + assetIndex * 3 + k * 5
+            val createdAt = now.minus(daysAgo, ChronoUnit.DAYS)
             val repairHours = 3 + k * 2
             create(
                 type = WorkOrderType.emergency,
                 title = nextTitle(EmergencyTitles),
                 assetIndex = assetIndex,
-                dueAt = date(dayOffset),
+                dueAt = date(-daysAgo),
                 createdAt = createdAt,
                 durationHours = repairHours,
                 status = WorkOrderStatus.closed,
@@ -181,63 +198,67 @@ fun seedManagerReports(
         }
     }
 
-    // PPR compliance mix over ~90 days: on-time, late, open overdue, open pending.
-    val pprOnTime = 40
-    val pprLate = 25
-    val pprOpenOverdue = 20
-    val pprOpenPending = 25
-    repeat(pprOnTime) { i ->
-        val dayOffset = -((i * 2) % 80 + 5).toLong()
-        val createdAt = now.minus((-dayOffset) + 2, ChronoUnit.DAYS)
+    // PPR: on-time closed (closed day before due).
+    repeat(40) { i ->
+        val assetIndex = i % assetIds.size
+        val dueOffset = nextPastDueOffset(assetIndex)
         create(
             type = WorkOrderType.ppr,
             title = nextTitle(PprTitles),
-            assetIndex = i,
-            dueAt = date(dayOffset),
-            createdAt = createdAt,
+            assetIndex = assetIndex,
+            dueAt = date(dueOffset),
+            createdAt = now.minus((-dueOffset) + 2, ChronoUnit.DAYS),
             durationHours = 4 + (i % 6),
             status = WorkOrderStatus.closed,
-            transitionAt = now.minus((-dayOffset) + 1, ChronoUnit.DAYS),
+            transitionAt = now.minus((-dueOffset) + 1, ChronoUnit.DAYS),
         )
     }
-    repeat(pprLate) { i ->
-        val dayOffset = -((i * 3) % 70 + 4).toLong()
-        val createdAt = now.minus((-dayOffset) + 3, ChronoUnit.DAYS)
+
+    // PPR: late closed (closed day after due).
+    repeat(25) { i ->
+        val assetIndex = (i + 1) % assetIds.size
+        val dueOffset = nextPastDueOffset(assetIndex)
         create(
             type = WorkOrderType.ppr,
             title = nextTitle(PprTitles),
-            assetIndex = i + 1,
-            dueAt = date(dayOffset),
-            createdAt = createdAt,
+            assetIndex = assetIndex,
+            dueAt = date(dueOffset),
+            createdAt = now.minus((-dueOffset) + 3, ChronoUnit.DAYS),
             durationHours = 6 + (i % 5),
             status = WorkOrderStatus.closed,
-            transitionAt = now.minus((-dayOffset) - 1, ChronoUnit.DAYS),
+            transitionAt = now.minus((-dueOffset) - 1, ChronoUnit.DAYS),
         )
     }
-    repeat(pprOpenOverdue) { i ->
-        val dayOffset = -((i % 10) + 1).toLong()
+
+    // PPR: open overdue.
+    repeat(20) { i ->
+        val assetIndex = (i + 2) % assetIds.size
+        val dueOffset = nextPastDueOffset(assetIndex)
         create(
             type = WorkOrderType.ppr,
             title = nextTitle(PprTitles),
-            assetIndex = i + 2,
-            dueAt = date(dayOffset),
-            createdAt = now.minus((-dayOffset) + 3, ChronoUnit.DAYS),
+            assetIndex = assetIndex,
+            dueAt = date(dueOffset),
+            createdAt = now.minus((-dueOffset) + 3, ChronoUnit.DAYS),
             durationHours = 8,
         )
     }
-    repeat(pprOpenPending) { i ->
-        val dayOffset = ((i % 14) + 1).toLong()
+
+    // PPR: open pending (future due).
+    repeat(25) { i ->
+        val assetIndex = (i + 3) % assetIds.size
+        val dueOffset = nextFutureDueOffset(assetIndex)
         create(
             type = WorkOrderType.ppr,
             title = nextTitle(PprTitles),
-            assetIndex = i + 3,
-            dueAt = date(dayOffset),
+            assetIndex = assetIndex,
+            dueAt = date(dueOffset),
             createdAt = now.minus((i % 5 + 1).toLong(), ChronoUnit.DAYS),
             durationHours = 8,
         )
     }
 
-    // Open backlog across age buckets: <7d, 7–30d, >30d (+ overdue due dates).
+    // Open backlog across age buckets: <7d, 7–30d, >30d.
     repeat(18) { i ->
         create(
             type = WorkOrderType.emergency,
