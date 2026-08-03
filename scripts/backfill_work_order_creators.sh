@@ -40,6 +40,8 @@ SELECT org_id || E'\t' || user_id FROM user_scopes ORDER BY org_id, user_id;
 
 echo "work_orders_rows=$(wc -l </tmp/work_orders.tsv)"
 echo "user_scopes_rows=$(wc -l </tmp/user_scopes.tsv)"
+echo "=== user_scopes sample ==="
+head -20 /tmp/user_scopes.tsv || true
 
 export DRY_RUN FALLBACK_CREATOR_ID
 python3 <<'PY'
@@ -49,6 +51,11 @@ from datetime import datetime, timezone
 
 dry = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
 fallback = (os.environ.get("FALLBACK_CREATOR_ID") or "").strip()
+
+known = {
+    "382715225649971203": "382715229189963779",
+    "383177088934346755": "383177205334671363",
+}
 
 scopes = defaultdict(list)
 with open("/tmp/user_scopes.tsv") as f:
@@ -89,6 +96,8 @@ for row in rows:
         updates.append((row["id"], peer[org], "peer_created_by"))
     elif scopes.get(org):
         updates.append((row["id"], scopes[org][0], "user_scope"))
+    elif known.get(org):
+        updates.append((row["id"], known[org], "known_org_user"))
     elif fallback:
         updates.append((row["id"], fallback, "fallback"))
     else:
@@ -135,7 +144,9 @@ fi
 
 if [[ -f /tmp/backfill_creators.sql ]]; then
   echo "=== applying updates ==="
-  dash_psql -f /tmp/backfill_creators.sql
+  # File lives on the host; feed it to psql inside the container via stdin.
+  (cd "$DASH_COMPOSE" && docker compose exec -T dashboard-postgres \
+    psql -U dashboard -d dashboard -v ON_ERROR_STOP=1) </tmp/backfill_creators.sql
 else
   echo "no SQL file (nothing to update)"
 fi
