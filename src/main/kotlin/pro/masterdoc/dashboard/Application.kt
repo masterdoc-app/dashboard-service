@@ -225,6 +225,12 @@ fun Application.module(
             }
             call.respond(workOrder)
         }
+        post("/work-orders/{id}/attachments") {
+            val orgId = call.orgId()
+            val id = call.parameters["id"]!!
+            val req = call.receive<AttachWorkOrderAttachmentsRequest>()
+            call.respond(workOrderStore.appendAttachments(orgId, id, req.attachmentIds))
+        }
         patch("/work-orders/{id}") {
             if (call.isTicketsOnly()) {
                 throw IllegalArgumentException("tickets cannot modify work orders")

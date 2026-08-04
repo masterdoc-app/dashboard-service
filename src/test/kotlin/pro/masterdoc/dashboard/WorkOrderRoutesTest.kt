@@ -1582,6 +1582,77 @@ class WorkOrderRoutesTest {
             }
         assertEquals(HttpStatusCode.BadRequest, res.status)
     }
+
+    @Test
+    fun workOrderAttachmentsCreateAppendAndCapAtTen() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val created =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"Фото","assetId":"a1","siteId":"s1","dueAt":"2026-07-22","attachmentIds":["att-1","att-2"]}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, created.status)
+        val createdBody = json.parseToJsonElement(created.bodyAsText()).jsonObject
+        assertEquals(
+            listOf("att-1", "att-2"),
+            createdBody["attachmentIds"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        val id = createdBody["id"]!!.jsonPrimitive.content
+
+        val appended =
+            client.post("/work-orders/$id/attachments") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"attachmentIds":["att-3","att-3"]}""")
+            }
+        assertEquals(HttpStatusCode.OK, appended.status)
+        assertEquals(
+            listOf("att-1", "att-2", "att-3"),
+            json.parseToJsonElement(appended.bodyAsText()).jsonObject["attachmentIds"]!!.jsonArray
+                .map { it.jsonPrimitive.content },
+        )
+
+        val tooMany =
+            client.post("/work-orders/$id/attachments") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"attachmentIds":["att-4","att-5","att-6","att-7","att-8","att-9","att-10","att-11"]}""",
+                )
+            }
+        assertEquals(HttpStatusCode.BadRequest, tooMany.status)
+        assertEquals("Too many attachments", tooMany.bodyAsText())
+    }
+
+    @Test
+    fun workOrderAttachmentsDefaultToEmptyList() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val created =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody("""{"type":"emergency","title":"Без фото","assetId":"a1","siteId":"s1","dueAt":"2026-07-22"}""")
+            }
+        assertEquals(HttpStatusCode.Created, created.status)
+        assertEquals(
+            0,
+            json.parseToJsonElement(created.bodyAsText()).jsonObject["attachmentIds"]!!.jsonArray.size,
+        )
+    }
+
     private fun withApplication(block: suspend ApplicationTestBuilder.() -> Unit) {
         Db.connect(postgres.jdbcUrl, postgres.username, postgres.password).use { connected ->
             dataSource = connected

@@ -1,6 +1,9 @@
 package pro.masterdoc.dashboard
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import java.sql.ResultSet
 import java.time.Instant
 import java.util.UUID
@@ -36,6 +39,7 @@ data class WorkOrder(
     val updatedAt: String,
     val startedAt: String? = null,
     val closedAt: String? = null,
+    val attachmentIds: List<String> = emptyList(),
 )
 
 @Serializable
@@ -60,6 +64,12 @@ data class CreateWorkOrderRequest(
     val maintenanceMapItemId: String? = null,
     val description: String? = null,
     val source: WorkOrderSource = WorkOrderSource.api,
+    val attachmentIds: List<String>? = null,
+)
+
+@Serializable
+data class AttachWorkOrderAttachmentsRequest(
+    val attachmentIds: List<String>,
 )
 
 @Serializable
@@ -116,6 +126,27 @@ class WorkOrderStore(
         assigneeId: String? = null,
         now: Instant = Instant.now(),
     ): WorkOrder = updateJdbc(orgId, id, status, title, dueAt, durationHours, assigneePresent, assigneeId, now)
+
+    fun appendAttachments(orgId: String, id: String, ids: List<String>): WorkOrder {
+        val current = get(orgId, id)
+        val newIds = ids.distinct()
+        require(current.attachmentIds.size + newIds.size <= MAX_ATTACHMENTS) { "Too many attachments" }
+        val nextIds = (current.attachmentIds + newIds).distinct()
+        if (nextIds == current.attachmentIds) return current
+        val updated = current.copy(attachmentIds = nextIds, updatedAt = Instant.now().toString())
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "UPDATE work_orders SET attachment_ids = ?, updated_at = ? WHERE id = ? AND org_id = ?",
+            ).use { statement ->
+                statement.setString(1, encodeAttachmentIds(updated.attachmentIds))
+                statement.setString(2, updated.updatedAt)
+                statement.setString(3, id)
+                statement.setString(4, orgId)
+                statement.executeUpdate()
+            }
+        }
+        return updated
+    }
 
     fun list(orgId: String, assigneeId: String? = null, createdBy: String? = null): List<WorkOrder> =
         dataSource.connection.use { connection ->
@@ -263,6 +294,8 @@ class WorkOrderStore(
         require(WeekDates.parseDate(req.dueAt) != null) { "dueAt must be YYYY-MM-DD" }
         val description = req.description?.trim()?.takeIf { it.isNotBlank() }
         require(description == null || description.length <= 4000) { "description too long" }
+        val attachmentIds = (req.attachmentIds ?: emptyList()).distinct()
+        require(attachmentIds.size <= MAX_ATTACHMENTS) { "Too many attachments" }
         when (req.type) {
             WorkOrderType.emergency ->
                 require(req.maintenanceMapId == null && req.maintenanceMapItemId == null) {
@@ -301,6 +334,7 @@ class WorkOrderStore(
             source = req.source,
             createdAt = stamp,
             updatedAt = stamp,
+            attachmentIds = attachmentIds,
         )
         dataSource.connection.use { connection ->
             connection.prepareStatement(
@@ -308,8 +342,8 @@ class WorkOrderStore(
                 INSERT INTO work_orders
                 (id, org_id, type, status, title, asset_id, site_id, due_at, duration_hours,
                  assignee_id, maintenance_map_id, maintenance_map_item_id, created_by, description,
-                 source, created_at, updated_at, started_at, closed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 source, created_at, updated_at, started_at, closed_at, attachment_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
                 """.trimIndent(),
             ).use { statement ->
@@ -332,6 +366,7 @@ class WorkOrderStore(
                 statement.setString(17, workOrder.updatedAt)
                 statement.setNullableString(18, workOrder.startedAt)
                 statement.setNullableString(19, workOrder.closedAt)
+                statement.setString(20, encodeAttachmentIds(workOrder.attachmentIds))
                 if (
                     statement.executeUpdate() == 0 &&
                     workOrder.type == WorkOrderType.ppr &&
@@ -447,8 +482,21 @@ class WorkOrderStore(
             updatedAt = getString("updated_at"),
             startedAt = getString("started_at"),
             closedAt = getString("closed_at"),
+            attachmentIds = decodeAttachmentIds(getString("attachment_ids")),
         )
 }
+
+private const val MAX_ATTACHMENTS = 10
+private val attachmentJson = Json
+
+private fun encodeAttachmentIds(ids: List<String>): String =
+    attachmentJson.encodeToString(ListSerializer(String.serializer()), ids)
+
+private fun decodeAttachmentIds(value: String?): List<String> =
+    value?.let {
+        runCatching { attachmentJson.decodeFromString(ListSerializer(String.serializer()), it) }
+            .getOrDefault(emptyList())
+    } ?: emptyList()
 
 private fun java.sql.PreparedStatement.setNullableString(index: Int, value: String?) {
     if (value == null) setNull(index, java.sql.Types.VARCHAR) else setString(index, value)
