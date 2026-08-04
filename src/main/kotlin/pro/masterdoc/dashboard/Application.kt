@@ -158,6 +158,51 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/kpi-trends") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.kpiTrends(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                    now = Instant.now(clock),
+                ),
+            )
+        }
+        get("/reports/reactive-completion") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.reactiveCompletion(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
+        get("/reports/engineer-workload") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.engineerWorkload(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
+        get("/reports/failure-frequency") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.failureFrequency(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
 
         post("/work-orders") {
             val orgId = call.orgId()

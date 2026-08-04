@@ -212,6 +212,31 @@ class WorkOrderStore(
         now: Instant = Instant.now(),
     ): ManagerKpis = computeManagerKpis(list(orgId), from, to, now)
 
+    fun kpiTrends(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+        now: Instant = Instant.now(),
+    ): KpiTrendsReport = computeKpiTrends(list(orgId), from, to, now)
+
+    fun reactiveCompletion(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): ReactiveCompletionReport = computeReactiveCompletion(list(orgId), from, to)
+
+    fun engineerWorkload(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): EngineerWorkloadReport = computeEngineerWorkload(list(orgId), from, to)
+
+    fun failureFrequency(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): FailureFrequencyReport = computeFailureFrequency(list(orgId), from, to)
+
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }
         val start = WeekDates.parseDate(weekStart) ?: throw IllegalArgumentException("weekStart must be YYYY-MM-DD")

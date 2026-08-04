@@ -347,6 +347,64 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun extraReportRoutesReturnTheirExpectedShapes() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val emergency =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Авария", "asset-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update("org-1", emergency.id, status = WorkOrderStatus.in_progress, assigneePresent = true, assigneeId = "engineer-1", now = Instant.parse("2026-07-10T01:00:00Z"))
+        orders.update("org-1", emergency.id, status = WorkOrderStatus.closed, now = Instant.parse("2026-07-10T03:00:00Z"))
+
+        val pathsToExpectedKeys =
+            mapOf(
+                "/reports/kpi-trends?from=2026-07-01&to=2026-07-31" to setOf("bucket", "points"),
+                "/reports/reactive-completion?from=2026-07-01&to=2026-07-31" to setOf("createdCount", "completionRatePercent", "reactivePercent"),
+                "/reports/engineer-workload?from=2026-07-01&to=2026-07-31" to setOf("engineers"),
+                "/reports/failure-frequency?from=2026-07-01&to=2026-07-31" to setOf("assets"),
+            )
+
+        pathsToExpectedKeys.forEach { (path, expectedKeys) ->
+            val response = client.get(path) { header("X-Org-Id", "org-1") }
+
+            assertEquals(HttpStatusCode.OK, response.status, path)
+            val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            assertTrue(expectedKeys.all(body::containsKey), "Expected $expectedKeys in $path, got ${body.keys}")
+        }
+    }
+
+    @Test
+    fun extraReportRoutesReturnEmptyReportsForEmptyOrg() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val trends = client.get("/reports/kpi-trends?from=2026-07-01&to=2026-07-31") { header("X-Org-Id", "empty-org") }
+        assertEquals(HttpStatusCode.OK, trends.status)
+        assertEquals(0, json.parseToJsonElement(trends.bodyAsText()).jsonObject["points"]!!.jsonArray.size)
+
+        val reactive = client.get("/reports/reactive-completion?from=2026-07-01&to=2026-07-31") { header("X-Org-Id", "empty-org") }
+        assertEquals(HttpStatusCode.OK, reactive.status)
+        assertEquals(0, json.parseToJsonElement(reactive.bodyAsText()).jsonObject["createdCount"]!!.jsonPrimitive.int)
+
+        val workload = client.get("/reports/engineer-workload?from=2026-07-01&to=2026-07-31") { header("X-Org-Id", "empty-org") }
+        assertEquals(HttpStatusCode.OK, workload.status)
+        assertEquals(0, json.parseToJsonElement(workload.bodyAsText()).jsonObject["engineers"]!!.jsonArray.size)
+
+        val failures = client.get("/reports/failure-frequency?from=2026-07-01&to=2026-07-31") { header("X-Org-Id", "empty-org") }
+        assertEquals(HttpStatusCode.OK, failures.status)
+        assertEquals(0, json.parseToJsonElement(failures.bodyAsText()).jsonObject["assets"]!!.jsonArray.size)
+    }
+
+    @Test
     fun seedManagerReportsRoutePopulatesManagerKpis() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
