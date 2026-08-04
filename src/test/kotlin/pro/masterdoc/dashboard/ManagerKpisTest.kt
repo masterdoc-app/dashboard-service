@@ -155,6 +155,27 @@ class ManagerKpisTest {
     }
 
     @Test
+    fun availabilityIsClampedWhenDowntimeExceedsPeriodCapacity() {
+        val dayFrom = Instant.parse("2026-07-10T00:00:00Z")
+        val dayTo = Instant.parse("2026-07-10T23:59:59.999999999Z")
+        val orders =
+            listOf(
+                workOrder(
+                    "long-repair",
+                    WorkOrderType.emergency,
+                    WorkOrderStatus.closed,
+                    assetId = "asset-a",
+                    startedAt = "2026-07-09T00:00:00Z",
+                    closedAt = "2026-07-11T12:00:00Z",
+                ),
+            )
+
+        val result = computeManagerKpis(orders, dayFrom, dayTo, now)
+
+        assertEquals(0.0, result.availabilityPercent, 0.001)
+    }
+
+    @Test
     fun rejectsInvertedPeriod() {
         assertFailsWith<IllegalArgumentException> {
             computeManagerKpis(emptyList(), to, from, now)

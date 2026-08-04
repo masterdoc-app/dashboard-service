@@ -137,9 +137,14 @@ fun computeManagerKpis(
         else periodOrders.map { it.assetId }.distinct().size.coerceAtLeast(1)
     val periodHours = to.hoursSince(from)
     // Availability uses emergency downtime and the ranked-asset count; with no downtime it is always 100%.
+    // Daily trend buckets can accumulate more repair hours than wall-clock capacity;
+    // clamp so UI never shows impossible negative / >100% availability.
     val availability =
-        if (totalDowntime == 0.0) 100.0
-        else 100.0 * (1.0 - totalDowntime / (denominatorAssetCount * periodHours))
+        if (totalDowntime == 0.0 || periodHours <= 0.0) {
+            100.0
+        } else {
+            (100.0 * (1.0 - totalDowntime / (denominatorAssetCount * periodHours))).coerceIn(0.0, 100.0)
+        }
 
     return ManagerKpis(
         from = fromDate.toString(),

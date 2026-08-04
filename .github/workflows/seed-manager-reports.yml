@@ -49,11 +49,13 @@ jobs:
           import json
           payload = json.load(open("/tmp/org-users.json"))
           users = payload if isinstance(payload, list) else payload.get("items") or payload.get("users") or []
-          ids = [
+          engineers = [
               str(user["id"]) for user in users
               if user.get("id") and ("engineer" in json.dumps(user, ensure_ascii=False).lower()
                                    or "инженер" in json.dumps(user, ensure_ascii=False).lower())
           ]
+          # Prefer engineers; otherwise any org members so workload shows real names.
+          ids = engineers or [str(user["id"]) for user in users if user.get("id")]
           print(json.dumps(ids[:3]))
           ')
                 if test "$CANDIDATE_IDS" != '[]'; then
