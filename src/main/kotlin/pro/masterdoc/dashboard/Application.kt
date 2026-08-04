@@ -228,6 +228,10 @@ fun Application.module(
         post("/work-orders/{id}/attachments") {
             val orgId = call.orgId()
             val id = call.parameters["id"]!!
+            val existing = workOrderStore.get(orgId, id)
+            if (call.isTicketsOnly() && existing.createdBy != call.userId()) {
+                throw NoSuchElementException("Work order not found")
+            }
             val req = call.receive<AttachWorkOrderAttachmentsRequest>()
             call.respond(workOrderStore.appendAttachments(orgId, id, req.attachmentIds))
         }

@@ -1557,6 +1557,35 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun ticketsOnlyCannotAttachToForeignWorkOrder() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val created =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-1")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody("""{"type":"emergency","title":"Чужая","assetId":"a1","siteId":"s1","dueAt":"2026-07-29","description":"Ticket description"}""")
+            }
+        val id = json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+
+        val res =
+            client.post("/work-orders/$id/attachments") {
+                header("X-Org-Id", "org-1")
+                header("X-User-Id", "customer-2")
+                header("X-Caller-Features", "tickets")
+                contentType(ContentType.Application.Json)
+                setBody("""{"attachmentIds":["att-foreign"]}""")
+            }
+
+        assertEquals(HttpStatusCode.NotFound, res.status)
+    }
+
+    @Test
     fun ticketsOnlyPatchReturns400() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
