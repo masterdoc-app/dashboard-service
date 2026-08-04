@@ -377,6 +377,7 @@ fun Application.module(
                     assetIds = body.assetIds,
                     now = Instant.now(clock),
                     createdBy = body.createdBy,
+                    assigneeIds = body.assigneeIds,
                 ),
             )
         }

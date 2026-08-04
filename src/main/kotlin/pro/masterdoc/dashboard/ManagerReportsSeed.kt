@@ -4,12 +4,14 @@ import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
+import kotlin.math.sin
 
 @Serializable
 data class SeedManagerReportsRequest(
     val siteId: String,
     val assetIds: List<String>,
     val createdBy: String? = null,
+    val assigneeIds: List<String> = emptyList(),
 )
 
 @Serializable
@@ -79,12 +81,18 @@ fun seedManagerReports(
     assetIds: List<String>,
     now: Instant,
     createdBy: String? = null,
+    assigneeIds: List<String> = emptyList(),
 ): SeedManagerReportsResponse {
     require(orgId.isNotBlank()) { "orgId required" }
     require(siteId.isNotBlank()) { "siteId required" }
     require(assetIds.isNotEmpty()) { "assetIds must not be empty" }
     require(assetIds.all { it.isNotBlank() }) { "assetIds must not contain blank values" }
     val creator = createdBy?.trim()?.takeIf { it.isNotBlank() }
+    val seedAssigneeIds =
+        assigneeIds
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .ifEmpty { listOf("seed-engineer-1", "seed-engineer-2", "seed-engineer-3") }
 
     val deleted = store.clearOrg(orgId)
     val maps = SeedMaintenanceMaps(assetIds)
@@ -93,6 +101,7 @@ fun seedManagerReports(
     // Per-asset past/future due cursors → unique (mapItemId, dueAt).
     val pastDueCursor = IntArray(assetIds.size) { 5 }
     val futureDueCursor = IntArray(assetIds.size) { 1 }
+    var closedAssignmentIndex = 0
 
     fun nextTitle(pool: List<String>): String {
         val title = pool[titleSeq % pool.size]
@@ -112,6 +121,24 @@ fun seedManagerReports(
         val i = assetIndex % assetIds.size
         return (futureDueCursor[i]++).toLong()
     }
+
+    fun nextClosedAssigneeId(): String {
+        val index = closedAssignmentIndex++ % 10
+        return when {
+            index < 5 -> seedAssigneeIds[0]
+            index < 8 -> seedAssigneeIds.getOrElse(1) { seedAssigneeIds[0] }
+            else -> seedAssigneeIds.getOrElse(2) { seedAssigneeIds[0] }
+        }
+    }
+
+    fun emergencyAssetIndex(index: Int): Int =
+        when {
+            assetIds.size == 1 -> 0
+            assetIds.size == 2 -> index % 2
+            index % 20 < 9 -> 0
+            index % 20 < 16 -> 1
+            else -> 2 + (index % (assetIds.size - 2))
+        }
 
     fun create(
         type: WorkOrderType,
@@ -155,6 +182,13 @@ fun seedManagerReports(
                     now = startedAt,
                 )
                 store.update(orgId, workOrder.id, status = WorkOrderStatus.closed, now = transitionAt)
+                store.update(
+                    orgId,
+                    workOrder.id,
+                    assigneePresent = true,
+                    assigneeId = nextClosedAssigneeId(),
+                    now = transitionAt,
+                )
             }
             null -> Unit
             else -> store.update(orgId, workOrder.id, status = status, now = transitionAt)
@@ -165,12 +199,12 @@ fun seedManagerReports(
     repeat(90) { i ->
         val daysAgo = ((i * 87) % 90 + 1).toLong()
         val createdAt = now.minus(daysAgo, ChronoUnit.DAYS).minus((i % 11).toLong(), ChronoUnit.HOURS)
-        val repairHours = 2 + (i % 14)
+        val repairHours = 4 + ((sin(i * 0.35) + 1) * 6).toInt()
         val closeAt = createdAt.plus(repairHours.toLong(), ChronoUnit.HOURS)
         create(
             type = WorkOrderType.emergency,
             title = nextTitle(EmergencyTitles),
-            assetIndex = i % assetIds.size,
+            assetIndex = emergencyAssetIndex(i),
             dueAt = date(-daysAgo),
             createdAt = createdAt,
             durationHours = repairHours,

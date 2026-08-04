@@ -40,21 +40,50 @@ jobs:
           test "$ASSET_COUNT" -gt 0 || { echo "No assets for org ${ORG_ID}"; exit 1; }
           echo "ASSET_COUNT=$ASSET_COUNT"
 
+          ASSIGNEE_IDS='[]'
+          for FEATURE_PORT in 8082 8090; do
+            for USERS_PATH in /admin/users /users; do
+              if curl -fsS --max-time 10 -H "X-Org-Id: ${ORG_ID}" \
+                "http://127.0.0.1:${FEATURE_PORT}${USERS_PATH}" >/tmp/org-users.json; then
+                CANDIDATE_IDS=$(python3 -c '
+          import json
+          payload = json.load(open("/tmp/org-users.json"))
+          users = payload if isinstance(payload, list) else payload.get("items") or payload.get("users") or []
+          ids = [
+              str(user["id"]) for user in users
+              if user.get("id") and ("engineer" in json.dumps(user, ensure_ascii=False).lower()
+                                   or "инженер" in json.dumps(user, ensure_ascii=False).lower())
+          ]
+          print(json.dumps(ids[:3]))
+          ')
+                if test "$CANDIDATE_IDS" != '[]'; then
+                  ASSIGNEE_IDS="$CANDIDATE_IDS"
+                  break 2
+                fi
+              fi
+            done
+          done
+          echo "ASSIGNEE_IDS=${ASSIGNEE_IDS}"
+
           CREATOR_ID="seed-${ORG_ID}"
           echo "CREATOR_ID=$CREATOR_ID"
-          export ORG_ID SITE_ID CREATOR_ID
+          export ORG_ID SITE_ID CREATOR_ID ASSIGNEE_IDS
 
           python3 -c '
           import json, os, urllib.request
           org = os.environ["ORG_ID"]
           site = os.environ["SITE_ID"]
           creator = os.environ["CREATOR_ID"]
+          assignee_ids = json.loads(os.environ["ASSIGNEE_IDS"])
           items = json.load(open("/tmp/assets.json")).get("items") or []
-          body = json.dumps({
+          payload = {
               "siteId": site,
               "assetIds": [a["id"] for a in items],
               "createdBy": creator,
-          }).encode()
+          }
+          if assignee_ids:
+              payload["assigneeIds"] = assignee_ids
+          body = json.dumps(payload).encode()
           print("BODY_BYTES", len(body), flush=True)
           req = urllib.request.Request(
               "http://127.0.0.1:8092/internal/orgs/%s/seed-manager-reports" % org,
@@ -82,6 +111,24 @@ jobs:
               % (k.get("from"), k.get("to"), k.get("emergencyCount"), k.get("plannedCount"), k.get("mttrHours"), k.get("availabilityPercent")),
               flush=True,
           )
+          '
+          for REPORT in kpi-trends engineer-workload failure-frequency; do
+            curl -sS --fail --max-time 60 -H "X-Org-Id: ${ORG_ID}" \
+              "http://127.0.0.1:8092/reports/${REPORT}?from=${FROM}&to=${TO}" \
+              >/tmp/manager-${REPORT}.json
+          done
+          python3 -c '
+          import json
+          checks = {
+              "kpi-trends": "points",
+              "engineer-workload": "engineers",
+              "failure-frequency": "assets",
+          }
+          for report, field in checks.items():
+              payload = json.load(open("/tmp/manager-%s.json" % report))
+              values = payload.get(field) or []
+              assert values, "%s returned no %s" % (report, field)
+              print("%s %s=%s" % (report, field, len(values)), flush=True)
           '
           echo "seed done"
           REMOTE

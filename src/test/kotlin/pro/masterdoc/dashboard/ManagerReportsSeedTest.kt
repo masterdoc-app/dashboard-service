@@ -24,15 +24,42 @@ class ManagerReportsSeedTest {
                     store = store,
                     orgId = "smoke",
                     siteId = "ceh-1",
-                    assetIds = listOf("asset-a", "asset-b"),
+                    assetIds = listOf("asset-a", "asset-b", "asset-c"),
                     now = now,
                     createdBy = "seed-user-1",
+                    assigneeIds = listOf("engineer-a", "engineer-b", "engineer-c"),
                 )
 
             assertTrue(result.created >= 200, "expected dense demo seed, got ${result.created}")
             assertEquals("smoke", result.orgId)
-            assertEquals(result.created, store.list("smoke").size)
-            assertTrue(store.list("smoke").all { it.createdBy == "seed-user-1" })
+            val orders = store.list("smoke")
+            assertEquals(result.created, orders.size)
+            assertTrue(orders.all { it.createdBy == "seed-user-1" })
+            val closedAssignments =
+                orders
+                    .filter { it.status == WorkOrderStatus.closed }
+                    .groupingBy { it.assigneeId }
+                    .eachCount()
+            assertEquals(
+                orders.count { it.status == WorkOrderStatus.closed },
+                closedAssignments.values.sum(),
+            )
+            assertTrue(closedAssignments["engineer-a"]!! > closedAssignments["engineer-b"]!!)
+            assertTrue(closedAssignments["engineer-b"]!! > closedAssignments["engineer-c"]!!)
+            val emergencyCountsByAsset =
+                orders
+                    .filter { it.type == WorkOrderType.emergency && it.status == WorkOrderStatus.closed }
+                    .groupingBy { it.assetId }
+                    .eachCount()
+            assertTrue(emergencyCountsByAsset["asset-a"]!! > emergencyCountsByAsset["asset-c"]!!)
+            assertTrue(emergencyCountsByAsset["asset-b"]!! > emergencyCountsByAsset["asset-c"]!!)
+            assertTrue(
+                orders
+                    .filter { it.type == WorkOrderType.emergency && it.status == WorkOrderStatus.closed }
+                    .map { it.durationHours }
+                    .distinct()
+                    .size > 5,
+            )
 
             val kpis =
                 store.managerKpis(
@@ -76,6 +103,12 @@ class ManagerReportsSeedTest {
 
             assertEquals(1, result.deleted)
             assertEquals(result.created, store.list("smoke").size)
+            assertTrue(
+                store
+                    .list("smoke")
+                    .filter { it.status == WorkOrderStatus.closed }
+                    .all { it.assigneeId in setOf("seed-engineer-1", "seed-engineer-2", "seed-engineer-3") },
+            )
             assertFailsWith<IllegalArgumentException> {
                 seedManagerReports(store, "smoke", "ceh-1", emptyList(), now)
             }
