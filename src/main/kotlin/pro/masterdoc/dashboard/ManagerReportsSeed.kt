@@ -171,6 +171,13 @@ fun seedManagerReports(
         created++
         when (status) {
             WorkOrderStatus.closed -> {
+                store.update(
+                    orgId,
+                    workOrder.id,
+                    assigneePresent = true,
+                    assigneeId = nextClosedAssigneeId(),
+                    now = createdAt,
+                )
                 val startedAt =
                     transitionAt
                         .minus(durationHours.coerceAtLeast(1).toLong(), ChronoUnit.HOURS)
@@ -182,13 +189,6 @@ fun seedManagerReports(
                     now = startedAt,
                 )
                 store.update(orgId, workOrder.id, status = WorkOrderStatus.closed, now = transitionAt)
-                store.update(
-                    orgId,
-                    workOrder.id,
-                    assigneePresent = true,
-                    assigneeId = nextClosedAssigneeId(),
-                    now = transitionAt,
-                )
             }
             null -> Unit
             else -> store.update(orgId, workOrder.id, status = status, now = transitionAt)
