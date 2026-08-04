@@ -1,5 +1,6 @@
 package pro.masterdoc.dashboard
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -39,6 +40,7 @@ data class WorkOrder(
     val updatedAt: String,
     val startedAt: String? = null,
     val closedAt: String? = null,
+    @EncodeDefault
     val attachmentIds: List<String> = emptyList(),
 )
 
