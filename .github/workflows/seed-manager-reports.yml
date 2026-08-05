@@ -73,8 +73,8 @@ jobs:
                 ASSIGNEE_IDS='["383177205334671363","384475024746086403"]'
                 ;;
               382715225649971203)
-                # Fixaverse Demo: butov6101 engineer
-                ASSIGNEE_IDS='["384661810608865283"]'
+                # Fixaverse Demo: RuStore Инженер + butov6101 engineer
+                ASSIGNEE_IDS='["384928904692891651","384661810608865283"]'
                 ;;
             esac
           fi
