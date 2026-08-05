@@ -88,11 +88,12 @@ fun seedManagerReports(
     require(assetIds.isNotEmpty()) { "assetIds must not be empty" }
     require(assetIds.all { it.isNotBlank() }) { "assetIds must not contain blank values" }
     val creator = createdBy?.trim()?.takeIf { it.isNotBlank() }
+    // Real Zitadel user ids only — never invent fake "seed-engineer-*" assignees.
+    // Fake ids break Board UI: label "Пользователь" + "вне зоны ответственности".
     val seedAssigneeIds =
         assigneeIds
             .map(String::trim)
             .filter(String::isNotBlank)
-            .ifEmpty { listOf("seed-engineer-1", "seed-engineer-2", "seed-engineer-3") }
 
     val deleted = store.clearOrg(orgId)
     val maps = SeedMaintenanceMaps(assetIds)
@@ -122,7 +123,8 @@ fun seedManagerReports(
         return (futureDueCursor[i]++).toLong()
     }
 
-    fun nextClosedAssigneeId(): String {
+    fun nextClosedAssigneeId(): String? {
+        if (seedAssigneeIds.isEmpty()) return null
         val index = closedAssignmentIndex++ % 10
         return when {
             index < 5 -> seedAssigneeIds[0]
@@ -171,13 +173,16 @@ fun seedManagerReports(
         created++
         when (status) {
             WorkOrderStatus.closed -> {
-                store.update(
-                    orgId,
-                    workOrder.id,
-                    assigneePresent = true,
-                    assigneeId = nextClosedAssigneeId(),
-                    now = createdAt,
-                )
+                val assigneeId = nextClosedAssigneeId()
+                if (assigneeId != null) {
+                    store.update(
+                        orgId,
+                        workOrder.id,
+                        assigneePresent = true,
+                        assigneeId = assigneeId,
+                        now = createdAt,
+                    )
+                }
                 val startedAt =
                     transitionAt
                         .minus(durationHours.coerceAtLeast(1).toLong(), ChronoUnit.HOURS)

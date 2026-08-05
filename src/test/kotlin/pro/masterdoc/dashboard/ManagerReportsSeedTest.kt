@@ -107,7 +107,8 @@ class ManagerReportsSeedTest {
                 store
                     .list("smoke")
                     .filter { it.status == WorkOrderStatus.closed }
-                    .all { it.assigneeId in setOf("seed-engineer-1", "seed-engineer-2", "seed-engineer-3") },
+                    .all { it.assigneeId == null },
+                "without real assigneeIds, closed WOs must not get fake seed-engineer-* ids",
             )
             assertFailsWith<IllegalArgumentException> {
                 seedManagerReports(store, "smoke", "ceh-1", emptyList(), now)

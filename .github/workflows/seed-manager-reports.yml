@@ -65,7 +65,23 @@ jobs:
               fi
             done
           done
+          # Fallback: known real engineer user ids (never invent seed-engineer-*).
+          if test "$ASSIGNEE_IDS" = '[]'; then
+            case "${ORG_ID}" in
+              383177088934346755)
+                # Fixaverse Smoke: mail+smoke + mail+rustore
+                ASSIGNEE_IDS='["383177205334671363","384475024746086403"]'
+                ;;
+              382715225649971203)
+                # Fixaverse Demo: butov6101 engineer
+                ASSIGNEE_IDS='["384661810608865283"]'
+                ;;
+            esac
+          fi
           echo "ASSIGNEE_IDS=${ASSIGNEE_IDS}"
+          if test "$ASSIGNEE_IDS" = '[]'; then
+            echo "WARN: no real assignee ids — closed WOs will be unassigned (UI-safe)"
+          fi
 
           CREATOR_ID="seed-${ORG_ID}"
           echo "CREATOR_ID=$CREATOR_ID"

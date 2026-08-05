@@ -1,0 +1,40 @@
+name: Clear Fake Seed Assignees
+
+on:
+  workflow_dispatch:
+    inputs:
+      org_id:
+        description: Org to clean (Smoke by default)
+        required: true
+        default: "383177088934346755"
+
+jobs:
+  clear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Null out seed-engineer-* assignees
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          ORG_ID: ${{ inputs.org_id }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$KEY" > /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no "${USER}@${HOST}" \
+            ORG_ID="$ORG_ID" bash -s <<'EOF'
+          set -euo pipefail
+          printf '%s\n' \
+            "SELECT assignee_id, count(*) FROM work_orders
+             WHERE org_id = '${ORG_ID}' AND assignee_id LIKE 'seed-engineer%'
+             GROUP BY 1 ORDER BY 2 DESC;" \
+            "UPDATE work_orders SET assignee_id = NULL
+             WHERE org_id = '${ORG_ID}' AND assignee_id LIKE 'seed-engineer%';" \
+            "SELECT count(*) FILTER (WHERE assignee_id LIKE 'seed-engineer%') AS remaining_fake,
+                    count(*) FILTER (WHERE assignee_id IS NOT NULL) AS with_assignee
+             FROM work_orders WHERE org_id = '${ORG_ID}';" \
+            | docker compose -f /opt/dashboard-service/deploy/docker-compose.yml \
+              exec -T dashboard-postgres \
+              psql -U dashboard -d dashboard -v ON_ERROR_STOP=1
+          EOF
