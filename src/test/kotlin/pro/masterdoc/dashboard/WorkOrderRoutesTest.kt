@@ -552,6 +552,92 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun pprPlanFactFiltersByPprDueAtAndSortsDueAtAsc() = withApplication {
+        val mapId = "map-ppr-report"
+        val itemId = "item-ppr-report"
+        val maps =
+            FakeMaintenanceMapGateway(
+                listOf(
+                    MaintenanceMapSnapshot(
+                        id = mapId,
+                        orgId = "org-1",
+                        assetId = "a1",
+                        activatedAt = "2026-07-01T00:00:00Z",
+                        items =
+                            listOf(
+                                MaintenanceMapItemSnapshot(
+                                    id = itemId,
+                                    title = "Осмотр",
+                                    interval = MaintenanceIntervalSnapshot(30, IntervalUnit.days),
+                                ),
+                            ),
+                    ),
+                ),
+            )
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val latePpr =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"ppr","title":"Поздний ППР","assetId":"a1","siteId":"s1","dueAt":"2026-07-20","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, latePpr.status)
+
+        val earlyPpr =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"ppr","title":"Ранний ППР","assetId":"a1","siteId":"s1","dueAt":"2026-07-10","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, earlyPpr.status)
+
+        val outsidePpr =
+            client.post("/work-orders") {
+                header("X-Org-Id", "org-1")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"ppr","title":"Вне периода","assetId":"a1","siteId":"s1","dueAt":"2026-08-01","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, outsidePpr.status)
+
+        client.post("/work-orders") {
+            header("X-Org-Id", "org-1")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"type":"emergency","title":"Авария","assetId":"a1","siteId":"s1","dueAt":"2026-07-15"}""",
+            )
+        }
+
+        val response =
+            client.get("/reports/ppr-plan-fact?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(2, items.size)
+        assertEquals("2026-07-10", items[0].jsonObject["dueAt"]!!.jsonPrimitive.content)
+        assertEquals("Ранний ППР", items[0].jsonObject["title"]!!.jsonPrimitive.content)
+        assertEquals("2026-07-20", items[1].jsonObject["dueAt"]!!.jsonPrimitive.content)
+        assertEquals("ppr", items[0].jsonObject["type"]!!.jsonPrimitive.content)
+
+        val empty =
+            client.get("/reports/ppr-plan-fact?from=2026-08-01&to=2026-08-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, empty.status)
+        assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
+    }
+
+    @Test
     fun extraReportRoutesReturnTheirExpectedShapes() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
