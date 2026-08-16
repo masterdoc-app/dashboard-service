@@ -245,6 +245,13 @@ class WorkOrderStore(
         to: Instant,
     ): List<WorkOrder> = selectEquipmentWorkOrders(list(orgId), assetId, from, to)
 
+    fun siteWorkOrders(
+        orgId: String,
+        siteId: String,
+        from: Instant,
+        to: Instant,
+    ): List<WorkOrder> = selectSiteWorkOrders(list(orgId), siteId, from, to)
+
     fun overdueOpenWorkOrders(orgId: String, today: LocalDate): List<WorkOrder> =
         selectOverdueOpenWorkOrders(list(orgId), today)
 
