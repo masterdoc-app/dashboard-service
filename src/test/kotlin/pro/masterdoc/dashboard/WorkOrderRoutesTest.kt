@@ -347,6 +347,65 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun overdueOpenWorkOrdersReturnsOnlyOpenPastDue() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val overdueNew =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Overdue new", "asset-1", "site-1", "2026-07-15"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        val overdueIp =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Overdue IP", "asset-2", "site-1", "2026-07-20"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update("org-1", overdueIp.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-18T00:00:00Z"))
+        orders.create(
+            "org-1",
+            CreateWorkOrderRequest(WorkOrderType.emergency, "Due today", "asset-3", "site-1", "2026-07-22"),
+            now = Instant.parse("2026-07-10T00:00:00Z"),
+        )
+        val closedOverdue =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Closed overdue", "asset-4", "site-1", "2026-07-10"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update("org-1", closedOverdue.id, status = WorkOrderStatus.in_progress, now = Instant.parse("2026-07-11T00:00:00Z"))
+        orders.update("org-1", closedOverdue.id, status = WorkOrderStatus.closed, now = Instant.parse("2026-07-12T00:00:00Z"))
+
+        val response =
+            client.get("/reports/overdue-open-work-orders") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(listOf(overdueNew.id, overdueIp.id), items.map { it.jsonObject["id"]!!.jsonPrimitive.content })
+    }
+
+    @Test
+    fun overdueOpenWorkOrdersEmptyOrgReturnsEmptyArray() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val response =
+            client.get("/reports/overdue-open-work-orders") {
+                header("X-Org-Id", "empty-org")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(0, json.parseToJsonElement(response.bodyAsText()).jsonArray.size)
+    }
+
+    @Test
     fun equipmentWorkOrdersRequiresAssetIdAndFiltersOverlap() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
