@@ -553,6 +553,7 @@ class WorkOrderRoutesTest {
 
     @Test
     fun pprPlanFactFiltersByPprDueAtAndSortsDueAtAsc() = withApplication {
+        val orgId = "org-ppr-plan-fact"
         val mapId = "map-ppr-report"
         val itemId = "item-ppr-report"
         val maps =
@@ -560,7 +561,7 @@ class WorkOrderRoutesTest {
                 listOf(
                     MaintenanceMapSnapshot(
                         id = mapId,
-                        orgId = "org-1",
+                        orgId = orgId,
                         assetId = "a1",
                         activatedAt = "2026-07-01T00:00:00Z",
                         items =
@@ -581,7 +582,7 @@ class WorkOrderRoutesTest {
 
         val latePpr =
             client.post("/work-orders") {
-                header("X-Org-Id", "org-1")
+                header("X-Org-Id", orgId)
                 contentType(ContentType.Application.Json)
                 setBody(
                     """{"type":"ppr","title":"Поздний ППР","assetId":"a1","siteId":"s1","dueAt":"2026-07-20","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
@@ -591,7 +592,7 @@ class WorkOrderRoutesTest {
 
         val earlyPpr =
             client.post("/work-orders") {
-                header("X-Org-Id", "org-1")
+                header("X-Org-Id", orgId)
                 contentType(ContentType.Application.Json)
                 setBody(
                     """{"type":"ppr","title":"Ранний ППР","assetId":"a1","siteId":"s1","dueAt":"2026-07-10","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
@@ -601,7 +602,7 @@ class WorkOrderRoutesTest {
 
         val outsidePpr =
             client.post("/work-orders") {
-                header("X-Org-Id", "org-1")
+                header("X-Org-Id", orgId)
                 contentType(ContentType.Application.Json)
                 setBody(
                     """{"type":"ppr","title":"Вне периода","assetId":"a1","siteId":"s1","dueAt":"2026-08-01","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
@@ -610,7 +611,7 @@ class WorkOrderRoutesTest {
         assertEquals(HttpStatusCode.Created, outsidePpr.status)
 
         client.post("/work-orders") {
-            header("X-Org-Id", "org-1")
+            header("X-Org-Id", orgId)
             contentType(ContentType.Application.Json)
             setBody(
                 """{"type":"emergency","title":"Авария","assetId":"a1","siteId":"s1","dueAt":"2026-07-15"}""",
@@ -619,7 +620,7 @@ class WorkOrderRoutesTest {
 
         val response =
             client.get("/reports/ppr-plan-fact?from=2026-07-01&to=2026-07-31") {
-                header("X-Org-Id", "org-1")
+                header("X-Org-Id", orgId)
             }
         assertEquals(HttpStatusCode.OK, response.status)
         val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
@@ -631,7 +632,7 @@ class WorkOrderRoutesTest {
 
         val empty =
             client.get("/reports/ppr-plan-fact?from=2026-08-01&to=2026-08-31") {
-                header("X-Org-Id", "org-1")
+                header("X-Org-Id", orgId)
             }
         assertEquals(HttpStatusCode.OK, empty.status)
         assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
