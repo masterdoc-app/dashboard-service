@@ -21,7 +21,12 @@ fun selectEquipmentWorkOrders(
 
 private fun overlapsPeriod(order: WorkOrder, from: Instant, to: Instant): Boolean {
     val start = order.createdAt.toInstantOrNull() ?: return false
-    val end = order.closedAt?.toInstantOrNull() ?: to
+    val end =
+        if (order.closedAt == null) {
+            to
+        } else {
+            order.closedAt.toInstantOrNull() ?: return false
+        }
     return !start.isAfter(to) && !end.isBefore(from)
 }
 

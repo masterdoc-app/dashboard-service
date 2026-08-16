@@ -51,6 +51,21 @@ class EquipmentWorkOrdersReportTest {
     }
 
     @Test
+    fun dropsUnparseableClosedAt() {
+        val bad =
+            workOrder(
+                "bad-closed",
+                assetId = "pump",
+                createdAt = "2026-07-10T00:00:00Z",
+                closedAt = "not-a-date",
+            )
+        assertEquals(
+            emptyList(),
+            selectEquipmentWorkOrders(listOf(bad), "pump", from, to).map { it.id },
+        )
+    }
+
+    @Test
     fun sortsByCreatedAtDescThenIdDesc() {
         val a = workOrder("a", assetId = "pump", createdAt = "2026-07-10T00:00:00Z")
         val b = workOrder("b", assetId = "pump", createdAt = "2026-07-20T00:00:00Z")

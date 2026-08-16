@@ -380,6 +380,13 @@ class WorkOrderRoutesTest {
         assertEquals(1, items.size)
         assertEquals(included.id, items.single().jsonObject["id"]!!.jsonPrimitive.content)
         assertEquals("Утечка", items.single().jsonObject["title"]!!.jsonPrimitive.content)
+
+        val empty =
+            client.get("/reports/equipment-work-orders?assetId=no-overlap&from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, empty.status)
+        assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
     }
 
     @Test
