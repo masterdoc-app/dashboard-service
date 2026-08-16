@@ -7,6 +7,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.sql.ResultSet
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import javax.sql.DataSource
 
@@ -243,6 +244,9 @@ class WorkOrderStore(
         from: Instant,
         to: Instant,
     ): List<WorkOrder> = selectEquipmentWorkOrders(list(orgId), assetId, from, to)
+
+    fun overdueOpenWorkOrders(orgId: String, today: LocalDate): List<WorkOrder> =
+        selectOverdueOpenWorkOrders(list(orgId), today)
 
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }

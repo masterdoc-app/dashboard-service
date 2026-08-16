@@ -218,6 +218,10 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/overdue-open-work-orders") {
+            val today = Instant.now(clock).atZone(ZoneOffset.UTC).toLocalDate()
+            call.respond(workOrderStore.overdueOpenWorkOrders(call.orgId(), today))
+        }
 
         post("/work-orders") {
             val orgId = call.orgId()
