@@ -533,9 +533,14 @@ class WorkOrderRoutesTest {
         assertEquals(2, items.size)
         assertEquals(notStarted.id, items[0].jsonObject["id"]!!.jsonPrimitive.content)
         assertEquals(slowStart.id, items[1].jsonObject["id"]!!.jsonPrimitive.content)
+        val notStartedStartedAt = items[0].jsonObject["startedAt"]
+        assertTrue(
+            notStartedStartedAt == null || notStartedStartedAt == kotlinx.serialization.json.JsonNull,
+            "expected startedAt absent or null for not-started order",
+        )
         assertEquals(
-            kotlinx.serialization.json.JsonNull,
-            items[0].jsonObject["startedAt"],
+            "2026-07-12T00:00:00Z",
+            items[1].jsonObject["startedAt"]!!.jsonPrimitive.content,
         )
 
         val empty =
