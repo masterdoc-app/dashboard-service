@@ -269,6 +269,12 @@ class WorkOrderStore(
         return selectPprPlanFact(list(orgId), fromDate, toDate)
     }
 
+    fun closuresWithoutPhotos(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): List<WorkOrder> = selectClosuresWithoutPhotos(list(orgId), from, to)
+
     fun overdueOpenWorkOrders(orgId: String, today: LocalDate): List<WorkOrder> =
         selectOverdueOpenWorkOrders(list(orgId), today)
 
