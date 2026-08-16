@@ -203,6 +203,21 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/equipment-work-orders") {
+            val assetId =
+                call.request.queryParameters["assetId"]?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalArgumentException("assetId required")
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.equipmentWorkOrders(
+                    orgId = call.orgId(),
+                    assetId = assetId,
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
 
         post("/work-orders") {
             val orgId = call.orgId()

@@ -347,6 +347,49 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun equipmentWorkOrdersRequiresAssetIdAndFiltersOverlap() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val included =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Утечка", "pump-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.create(
+            "org-1",
+            CreateWorkOrderRequest(WorkOrderType.emergency, "Чужой станок", "other", "site-1", "2026-07-22"),
+            now = Instant.parse("2026-07-10T00:00:00Z"),
+        )
+
+        val missing =
+            client.get("/reports/equipment-work-orders?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.BadRequest, missing.status)
+
+        val response =
+            client.get("/reports/equipment-work-orders?assetId=pump-1&from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(1, items.size)
+        assertEquals(included.id, items.single().jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals("Утечка", items.single().jsonObject["title"]!!.jsonPrimitive.content)
+
+        val empty =
+            client.get("/reports/equipment-work-orders?assetId=no-overlap&from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, empty.status)
+        assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
+    }
+
+    @Test
     fun extraReportRoutesReturnTheirExpectedShapes() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)

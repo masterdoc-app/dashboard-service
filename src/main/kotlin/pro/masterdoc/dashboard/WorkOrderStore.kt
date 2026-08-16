@@ -237,6 +237,13 @@ class WorkOrderStore(
         to: Instant,
     ): FailureFrequencyReport = computeFailureFrequency(list(orgId), from, to)
 
+    fun equipmentWorkOrders(
+        orgId: String,
+        assetId: String,
+        from: Instant,
+        to: Instant,
+    ): List<WorkOrder> = selectEquipmentWorkOrders(list(orgId), assetId, from, to)
+
     fun board(orgId: String, weekStart: String, weeks: Int, assigneeId: String? = null): BoardResponse {
         require(weeks in 1..52) { "weeks must be 1..52" }
         val start = WeekDates.parseDate(weekStart) ?: throw IllegalArgumentException("weekStart must be YYYY-MM-DD")
