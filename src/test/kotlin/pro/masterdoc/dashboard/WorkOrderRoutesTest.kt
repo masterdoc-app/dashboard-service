@@ -639,6 +639,101 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun closuresWithoutPhotosFiltersClosedWithoutAttachmentsAndSortsClosedAtDesc() = withApplication {
+        val orgId = "org-closures-without-photos"
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+
+        val withoutPhotos =
+            orders.create(
+                orgId,
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Без фото", "pump-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update(
+            orgId,
+            withoutPhotos.id,
+            status = WorkOrderStatus.in_progress,
+            assigneePresent = true,
+            assigneeId = "engineer-1",
+            now = Instant.parse("2026-07-10T01:00:00Z"),
+        )
+        orders.update(
+            orgId,
+            withoutPhotos.id,
+            status = WorkOrderStatus.closed,
+            now = Instant.parse("2026-07-15T00:00:00Z"),
+        )
+
+        val withPhotos =
+            client.post("/work-orders") {
+                header("X-Org-Id", orgId)
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"type":"emergency","title":"С фото","assetId":"pump-2","siteId":"site-1","dueAt":"2026-07-22","attachmentIds":["att-1"]}""",
+                )
+            }
+        assertEquals(HttpStatusCode.Created, withPhotos.status)
+        val withPhotosId = json.parseToJsonElement(withPhotos.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
+        orders.update(
+            orgId,
+            withPhotosId,
+            status = WorkOrderStatus.in_progress,
+            assigneePresent = true,
+            assigneeId = "engineer-1",
+            now = Instant.parse("2026-07-12T00:00:00Z"),
+        )
+        orders.update(
+            orgId,
+            withPhotosId,
+            status = WorkOrderStatus.closed,
+            now = Instant.parse("2026-07-20T00:00:00Z"),
+        )
+
+        val outsidePeriod =
+            orders.create(
+                orgId,
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Вне периода", "pump-3", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-06-01T00:00:00Z"),
+            )
+        orders.update(
+            orgId,
+            outsidePeriod.id,
+            status = WorkOrderStatus.in_progress,
+            assigneePresent = true,
+            assigneeId = "engineer-1",
+            now = Instant.parse("2026-06-01T01:00:00Z"),
+        )
+        orders.update(
+            orgId,
+            outsidePeriod.id,
+            status = WorkOrderStatus.closed,
+            now = Instant.parse("2026-06-15T00:00:00Z"),
+        )
+
+        val response =
+            client.get("/reports/closures-without-photos?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", orgId)
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(1, items.size)
+        assertEquals(withoutPhotos.id, items.single().jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals("Без фото", items.single().jsonObject["title"]!!.jsonPrimitive.content)
+        assertEquals("closed", items.single().jsonObject["status"]!!.jsonPrimitive.content)
+
+        val empty =
+            client.get("/reports/closures-without-photos?from=2026-08-01&to=2026-08-31") {
+                header("X-Org-Id", orgId)
+            }
+        assertEquals(HttpStatusCode.OK, empty.status)
+        assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
+    }
+
+    @Test
     fun extraReportRoutesReturnTheirExpectedShapes() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
