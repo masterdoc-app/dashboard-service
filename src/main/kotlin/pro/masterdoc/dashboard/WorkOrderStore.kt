@@ -252,6 +252,12 @@ class WorkOrderStore(
         to: Instant,
     ): List<WorkOrder> = selectSiteWorkOrders(list(orgId), siteId, from, to)
 
+    fun timeToFirstAction(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): List<WorkOrder> = selectTimeToFirstAction(list(orgId), from, to)
+
     fun overdueOpenWorkOrders(orgId: String, today: LocalDate): List<WorkOrder> =
         selectOverdueOpenWorkOrders(list(orgId), today)
 

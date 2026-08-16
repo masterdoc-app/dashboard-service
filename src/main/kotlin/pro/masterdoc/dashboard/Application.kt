@@ -233,6 +233,17 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/time-to-first-action") {
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.timeToFirstAction(
+                    orgId = call.orgId(),
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
         get("/reports/overdue-open-work-orders") {
             val today = Instant.now(clock).atZone(ZoneOffset.UTC).toLocalDate()
             call.respond(workOrderStore.overdueOpenWorkOrders(call.orgId(), today))

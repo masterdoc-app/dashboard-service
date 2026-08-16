@@ -492,6 +492,61 @@ class WorkOrderRoutesTest {
     }
 
     @Test
+    fun timeToFirstActionFiltersByCreatedAtAndSortsNotStartedFirst() = withApplication {
+        val maps = FakeMaintenanceMapGateway()
+        val orders = WorkOrderStore(dataSource)
+        application {
+            module(maps, orders, AllowAllAssetLookup, PprScheduler(maps, orders, AllowAllAssetLookup, clock), clock)
+        }
+        val notStarted =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Новая", "pump-1", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-15T00:00:00Z"),
+            )
+        val slowStart =
+            orders.create(
+                "org-1",
+                CreateWorkOrderRequest(WorkOrderType.emergency, "Долгая реакция", "pump-2", "site-1", "2026-07-22"),
+                now = Instant.parse("2026-07-10T00:00:00Z"),
+            )
+        orders.update(
+            "org-1",
+            slowStart.id,
+            status = WorkOrderStatus.in_progress,
+            assigneePresent = true,
+            assigneeId = "engineer-1",
+            now = Instant.parse("2026-07-12T00:00:00Z"),
+        )
+        orders.create(
+            "org-1",
+            CreateWorkOrderRequest(WorkOrderType.emergency, "Вне периода", "pump-3", "site-1", "2026-07-22"),
+            now = Instant.parse("2026-06-01T00:00:00Z"),
+        )
+
+        val response =
+            client.get("/reports/time-to-first-action?from=2026-07-01&to=2026-07-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val items = json.parseToJsonElement(response.bodyAsText()).jsonArray
+        assertEquals(2, items.size)
+        assertEquals(notStarted.id, items[0].jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals(slowStart.id, items[1].jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals(
+            kotlinx.serialization.json.JsonNull,
+            items[0].jsonObject["startedAt"],
+        )
+
+        val empty =
+            client.get("/reports/time-to-first-action?from=2026-08-01&to=2026-08-31") {
+                header("X-Org-Id", "org-1")
+            }
+        assertEquals(HttpStatusCode.OK, empty.status)
+        assertEquals(0, json.parseToJsonElement(empty.bodyAsText()).jsonArray.size)
+    }
+
+    @Test
     fun extraReportRoutesReturnTheirExpectedShapes() = withApplication {
         val maps = FakeMaintenanceMapGateway()
         val orders = WorkOrderStore(dataSource)
