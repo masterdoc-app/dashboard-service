@@ -605,7 +605,7 @@ class WorkOrderRoutesTest {
                 header("X-Org-Id", orgId)
                 contentType(ContentType.Application.Json)
                 setBody(
-                    """{"type":"ppr","title":"Вне периода","assetId":"a1","siteId":"s1","dueAt":"2026-08-01","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
+                    """{"type":"ppr","title":"Вне периода","assetId":"a1","siteId":"s1","dueAt":"2026-09-01","maintenanceMapId":"$mapId","maintenanceMapItemId":"$itemId"}""",
                 )
             }
         assertEquals(HttpStatusCode.Created, outsidePpr.status)
