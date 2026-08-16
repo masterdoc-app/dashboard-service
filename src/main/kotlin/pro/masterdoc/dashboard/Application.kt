@@ -218,6 +218,21 @@ fun Application.module(
                 ),
             )
         }
+        get("/reports/site-work-orders") {
+            val siteId =
+                call.request.queryParameters["siteId"]?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalArgumentException("siteId required")
+            val from = parseReportBoundary(call.request.queryParameters["from"], isEnd = false)
+            val to = parseReportBoundary(call.request.queryParameters["to"], isEnd = true)
+            call.respond(
+                workOrderStore.siteWorkOrders(
+                    orgId = call.orgId(),
+                    siteId = siteId,
+                    from = from,
+                    to = to,
+                ),
+            )
+        }
         get("/reports/overdue-open-work-orders") {
             val today = Instant.now(clock).atZone(ZoneOffset.UTC).toLocalDate()
             call.respond(workOrderStore.overdueOpenWorkOrders(call.orgId(), today))
