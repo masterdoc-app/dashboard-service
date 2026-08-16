@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import java.sql.ResultSet
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.UUID
 import javax.sql.DataSource
 
@@ -257,6 +258,16 @@ class WorkOrderStore(
         from: Instant,
         to: Instant,
     ): List<WorkOrder> = selectTimeToFirstAction(list(orgId), from, to)
+
+    fun pprPlanFact(
+        orgId: String,
+        from: Instant,
+        to: Instant,
+    ): List<WorkOrder> {
+        val fromDate = from.atZone(ZoneOffset.UTC).toLocalDate()
+        val toDate = to.atZone(ZoneOffset.UTC).toLocalDate()
+        return selectPprPlanFact(list(orgId), fromDate, toDate)
+    }
 
     fun overdueOpenWorkOrders(orgId: String, today: LocalDate): List<WorkOrder> =
         selectOverdueOpenWorkOrders(list(orgId), today)
